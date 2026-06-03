@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="{{ site.language }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% if title %}{{ title }} · {{ site.title }}{% else %}{{ site.title }}{% endif %}</title>
+  <meta name="description" content="{{ description }}">
+  <link rel="canonical" href="{{ site.base_url }}/{% if path %}{{ path }}/{% endif %}">
+  <link rel="alternate" type="application/rss+xml" title="{{ site.title }}" href="/rss.xml">
+  <meta property="og:type" content="{{ og_type }}">
+  <meta property="og:title" content="{% if title %}{{ title }} · {{ site.title }}{% else %}{{ site.title }}{% endif %}">
+  <meta property="og:description" content="{{ description }}">
+  <meta name="twitter:card" content="summary">
+  <link rel="stylesheet" href="{{ site.stylesheet_href | safe }}">
+</head>
+<body>
+  <header>
+    <a href="/">{{ site.title }}</a>
+    <nav>
+      {% if theme.nav %}
+      {% for item in theme.nav %}
+      <a href="{{ item.href }}">{{ item.label }}</a>
+      {% endfor %}
+      {% endif %}
+    </nav>
+  </header>
+  <main>{{ body | safe }}</main>
+  <footer>
+    <p>&copy; {{ now() | date(format="%Y") }} {{ site.author.name }}</p>
+    {% if theme.footer_links %}
+    <p>
+      {% for link in theme.footer_links %}
+      <a href="{{ link.href }}">{{ link.label }}</a>
+      {% endfor %}
+    </p>
+    {% endif %}
+  </footer>
+</body>
+</html>
