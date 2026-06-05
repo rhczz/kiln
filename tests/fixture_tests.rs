@@ -2,8 +2,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use kiln::{build, build_with_artifacts, AuthorConfig, BuildArtifacts, BuildCache, BuildMode,
-           FeedConfig, PathsConfig, SiteConfig, SiteMeta};
+use kiln::{
+    build, build_with_artifacts, AuthorConfig, BuildArtifacts, BuildCache, BuildMode, FeedConfig,
+    PathsConfig, SiteConfig, SiteMeta,
+};
 
 struct FixtureBuilder {
     root: PathBuf,
@@ -40,11 +42,7 @@ impl FixtureBuilder {
         SiteConfig {
             paths: PathsConfig {
                 content: self.root.join("content").to_string_lossy().to_string(),
-                templates: self
-                    .root
-                    .join("templates")
-                    .to_string_lossy()
-                    .to_string(),
+                templates: self.root.join("templates").to_string_lossy().to_string(),
                 public: self.root.join("public").to_string_lossy().to_string(),
                 styles: self.root.join("styles.css").to_string_lossy().to_string(),
             },
@@ -150,7 +148,6 @@ tags: ["hello", "test"]
 
     let sitemap = read(&output.join("sitemap.xml"));
     assert!(sitemap.contains("/posts/hello/"));
-
 }
 
 // --- Multiple posts ---
@@ -170,7 +167,10 @@ date: "2026-06-{}"
 description: "Post number {}"
 featured: {}
 "#,
-                i, day, i, i == 1
+                i,
+                day,
+                i,
+                i == 1
             ),
             &format!("Content of post {}.", i),
         );
@@ -185,7 +185,6 @@ featured: {}
         let post = read(&output.join(&format!("posts/post-{}/index.html", i)));
         assert!(post.contains(&format!("Post {}", i)));
     }
-
 }
 
 // --- Pages without dates ---
@@ -209,7 +208,6 @@ fn pages_without_dates_render_correctly() {
 
     let contact = read(&output.join("contact/index.html"));
     assert!(contact.contains("Contact"));
-
 }
 
 // --- Public assets ---
@@ -231,12 +229,8 @@ fn public_assets_are_copied_to_output() {
         fs::read(output.join("images/logo.png")).unwrap(),
         b"PNG_DATA"
     );
-    assert_eq!(
-        fs::read(output.join("favicon.ico")).unwrap(),
-        b"ICO_DATA"
-    );
+    assert_eq!(fs::read(output.join("favicon.ico")).unwrap(), b"ICO_DATA");
     assert_eq!(fs::read(output.join("sub/deep.txt")).unwrap(), b"DEEP");
-
 }
 
 // --- Draft handling ---
@@ -272,7 +266,6 @@ draft: true
     let rss = read(&output.join("rss.xml"));
     assert!(rss.contains("Published"));
     assert!(!rss.contains("Draft"));
-
 }
 
 #[test]
@@ -294,7 +287,6 @@ draft: true
     build(&config, &output, true).unwrap();
 
     assert!(file_exists(&output.join("posts/draft/index.html")));
-
 }
 
 // --- Feed item count ---
@@ -330,7 +322,6 @@ description: "Post {}"
     assert!(rss.contains("Post 9"));
     assert!(rss.contains("Post 8"));
     assert!(!rss.contains("Post 7"));
-
 }
 
 // --- Sitemap ---
@@ -357,7 +348,6 @@ date: "2026-06-01"
     assert!(sitemap.contains("https://fixture.test/"));
     assert!(sitemap.contains("https://fixture.test/posts/post/"));
     assert!(sitemap.contains("https://fixture.test/about/"));
-
 }
 
 // --- robots.txt ---
@@ -376,7 +366,6 @@ fn robots_txt_points_to_sitemap() {
     assert!(robots.contains("User-agent: *"));
     assert!(robots.contains("Allow: /"));
     assert!(robots.contains("Sitemap: https://fixture.test/sitemap.xml"));
-
 }
 
 // --- Custom slug ---
@@ -401,7 +390,6 @@ slug: "custom-url"
 
     assert!(file_exists(&output.join("posts/custom-url/index.html")));
     assert!(!file_exists(&output.join("posts/original/index.html")));
-
 }
 
 // --- Featured posts ---
@@ -433,7 +421,6 @@ date: "2026-06-02"
 
     let index = read(&output.join("index.html"));
     assert!(index.contains("Featured"));
-
 }
 
 // --- Date prefix stripped ---
@@ -456,7 +443,6 @@ date: "2026-06-01"
     build(&config, &output, false).unwrap();
 
     assert!(file_exists(&output.join("posts/my-post/index.html")));
-
 }
 
 // --- Incremental build ---
@@ -513,5 +499,4 @@ date: "2026-06-01"
     let post = read(&output.join("posts/change/index.html"));
     assert!(post.contains("Updated Title"));
     assert!(!post.contains("Original Title"));
-
 }

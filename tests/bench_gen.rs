@@ -32,10 +32,7 @@ impl BenchSite {
         for i in 0..post_count {
             let day = ((i % 28) + 1).min(28);
             let month = ((i % 12) + 1).min(12);
-            let filename = format!(
-                "2024-{:02}-{:02}-post-{:04}.md",
-                month, day, i
-            );
+            let filename = format!("2024-{:02}-{:02}-post-{:04}.md", month, day, i);
             let frontmatter = format!(
                 r#"title: "Benchmark Post {}"
 date: "2024-{:02}-{:02}"
@@ -43,7 +40,12 @@ description: "Description for benchmark post number {} with enough words to simu
 tags: ["bench", "tag-{}", "perf"]
 featured: {}
 "#,
-                i, month, day, i, i % 10, i == 0
+                i,
+                month,
+                day,
+                i,
+                i % 10,
+                i == 0
             );
             let body = format!(
                 "## Section One\n\n\
@@ -81,11 +83,7 @@ featured: {}
         SiteConfig {
             paths: PathsConfig {
                 content: self.root.join("content").to_string_lossy().to_string(),
-                templates: self
-                    .root
-                    .join("templates")
-                    .to_string_lossy()
-                    .to_string(),
+                templates: self.root.join("templates").to_string_lossy().to_string(),
                 public: self.root.join("public").to_string_lossy().to_string(),
                 styles: self.root.join("styles.css").to_string_lossy().to_string(),
             },
