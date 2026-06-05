@@ -203,12 +203,12 @@ templates/post.html:8: variable `page.foo` not found
 
 **目标：不扩张，先稳。**
 
-- [ ] 梳理 build pipeline，明确各阶段职责
-- [ ] 加 build timing 输出
-- [ ] 加 fixture tests（最小站点、多内容站点）
-- [ ] 加 benchmark generator
-- [ ] 明确 config schema，文档化所有配置项
-- [ ] 文档化模板 context（site / page / collection 各字段）
+- [x] 梳理 build pipeline，明确各阶段职责
+- [x] 加 build timing 输出
+- [x] 加 fixture tests（最小站点、多内容站点）
+- [x] 加 benchmark generator
+- [x] 明确 config schema，文档化所有配置项
+- [x] 文档化模板 context（site / page / collection 各字段）
 
 ### v1 — 最小产品级 SSG
 
@@ -236,7 +236,7 @@ templates/post.html:8: variable `page.foo` not found
 - [ ] Dev server 错误 overlay 或清晰错误页
 - [ ] Build profile（`--profile`）
 - [ ] Golden output tests + snapshot diff
-- [ ] Large site benchmark
+- [x] Large site benchmark
 
 ### v3 — 生态增强（仍不做运行时）
 

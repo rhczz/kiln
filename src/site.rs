@@ -2,6 +2,7 @@ use crate::cache::BuildCache;
 use crate::config::{self as site_config, CollectionConfig, SiteConfig};
 use crate::content::{self, ContentItem};
 use crate::engine::Engine;
+use crate::timing::BuildTimer;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -64,14 +65,15 @@ pub fn build_with_artifacts(
     artifacts: &BuildArtifacts,
 ) -> anyhow::Result<()> {
     let collections = effective_collections(config);
+    let mut timer = BuildTimer::new();
 
-    // Create output directory
+    timer.phase("prepare_output");
     if matches!(mode, BuildMode::Full) && output_dir.exists() {
         std::fs::remove_dir_all(output_dir)?;
     }
     std::fs::create_dir_all(output_dir)?;
 
-    // Copy public assets before rendering generated pages so page output wins.
+    timer.phase("copy_public");
     match (mode, cache.as_mut()) {
         (BuildMode::Content, _) => {}
         (BuildMode::Public, Some(cache)) => {
@@ -86,10 +88,12 @@ pub fn build_with_artifacts(
 
     if matches!(mode, BuildMode::Public) {
         rewrite_404_stylesheet(output_dir, &artifacts.style_asset)?;
+        timer.finish();
+        eprintln!("Public build done in {}ms", timer.total_ms());
         return Ok(());
     }
 
-    // Load all items from all collections
+    timer.phase("load_content");
     let mut all_items: Vec<ContentItem> = Vec::new();
     for collection in &collections {
         let items = if let Some(cache) = cache.as_deref_mut() {
@@ -105,6 +109,7 @@ pub fn build_with_artifacts(
         all_items.extend(items);
     }
 
+    timer.phase("render_pages");
     let mut current_page_outputs: HashSet<PathBuf> = HashSet::new();
     let render_env = RenderEnv {
         engine: &artifacts.engine,
@@ -120,10 +125,11 @@ pub fn build_with_artifacts(
         &mut current_page_outputs,
     )?;
 
-    // Render home
+    timer.phase("render_home");
     render_home(&render_env, output_dir, &all_items)?;
 
     if matches!(mode, BuildMode::Full) {
+        timer.phase("write_assets");
         artifacts.style_asset.write(output_dir)?;
         write_asset_headers(output_dir)?;
     }
@@ -132,22 +138,21 @@ pub fn build_with_artifacts(
         rewrite_404_stylesheet(output_dir, &artifacts.style_asset)?;
     }
 
+    let output_count = current_page_outputs.len();
     if let Some(cache) = cache.as_mut() {
         let previous_outputs = cache.page_outputs().clone();
         prune_removed_outputs(output_dir, &previous_outputs, &current_page_outputs)?;
         cache.replace_page_outputs(current_page_outputs);
     }
 
-    // Generate RSS
+    timer.phase("generate_feeds");
     let feed_items = collect_feed_items(&collections, &all_items);
     let rss = crate::rss::generate(config, &feed_items);
     std::fs::write(output_dir.join("rss.xml"), rss)?;
 
-    // Generate sitemap
     let sitemap = crate::sitemap::generate(config, &all_items);
     std::fs::write(output_dir.join("sitemap.xml"), sitemap)?;
 
-    // Generate robots.txt
     std::fs::write(
         output_dir.join("robots.txt"),
         format!(
@@ -156,6 +161,7 @@ pub fn build_with_artifacts(
         ),
     )?;
 
+    timer.finish();
     let date_ordered_count = all_items.iter().filter(|i| i.year.is_some()).count();
     if date_ordered_count == 0 {
         eprintln!(
@@ -163,12 +169,7 @@ pub fn build_with_artifacts(
             config.paths.content
         );
     }
-    println!(
-        "Built {} items ({} date-ordered) into {:?}",
-        all_items.len(),
-        date_ordered_count,
-        output_dir
-    );
+    timer.print_report(all_items.len(), date_ordered_count, output_count);
 
     Ok(())
 }
