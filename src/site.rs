@@ -753,12 +753,8 @@ fn render_term_page(
         .split('/')
         .next()
         .map(|s| s.to_string());
-    let template = if !page.template.is_empty() && env.engine.template_exists(&page.template) {
-        page.template.clone()
-    } else {
-        env.engine
-            .resolve_template(&model::PageKind::Term, taxonomy_slug.as_deref())
-    };
+    let template =
+        effective_term_template(env.engine, &page.template, taxonomy_slug.as_deref());
     let body = env.engine.render(&template, &ctx)?;
     let dir_path = page.url.trim_start_matches('/').trim_end_matches('/');
     wrap_with_layout(env, &page.title, &page.description, &body, dir_path, false)
@@ -1129,6 +1125,20 @@ fn record_manifest_entries(
 
 /// Returns the full template dependency chain for a page, including
 /// the transitive deps of both the page template and layout.html.
+/// Unified term template selection: matches the logic in `render_term_page`.
+/// If `page_template` is non-empty and exists, use it; otherwise resolve via `PageKind::Term`.
+fn effective_term_template(
+    engine: &Engine,
+    page_template: &str,
+    taxonomy_slug: Option<&str>,
+) -> String {
+    if !page_template.is_empty() && engine.template_exists(page_template) {
+        page_template.to_string()
+    } else {
+        engine.resolve_template(&model::PageKind::Term, taxonomy_slug)
+    }
+}
+
 /// Returns the actual template used for rendering this page,
 /// matching the resolve_template() logic in the render functions.
 fn effective_template_for_page(
@@ -1159,7 +1169,7 @@ fn effective_template_for_page(
                         .find(|term| term.url == base_url)
                         .map(|_| t.slug.as_str())
                 });
-                engine.resolve_template(&model::PageKind::Term, tax_slug)
+                effective_term_template(engine, &page.template, tax_slug)
             }
         }
         model::PageKind::Section => {
@@ -1178,7 +1188,7 @@ fn effective_template_for_page(
                     .find(|term| term.url == page.url)
                     .map(|_| t.slug.as_str())
             });
-            engine.resolve_template(&page.kind, tax_slug)
+            effective_term_template(engine, &page.template, tax_slug)
         }
     }
 }
