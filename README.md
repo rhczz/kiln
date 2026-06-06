@@ -11,15 +11,18 @@ Built with Rust. Zero runtime dependencies. Single binary.
 - Markdown to HTML with syntax highlighting, tables, task lists (comrak)
 - TOML frontmatter for posts and pages
 - Tera templating engine with built-in default templates
+- Template dependency tracking for precise cache invalidation
 - Collections with custom routes and templates
 - Taxonomies (tags, categories, or custom groups) with dedicated templates
 - Paginated archives and section pages
 - RSS feed and sitemap generation
 - Built-in dev server with live reload on file changes
+- Asset fingerprinting with CSS url() rewriting and `asset_url()` Tera function
+- Parallel page rendering (tokio) for faster builds
+- Incremental builds with content, template, and asset-aware caching
 - Content hashing for cache busting
-- Incremental builds with content-aware caching
 - Draft support
-- Build profiling (`--profile`) with cache hit rate and per-page timing
+- Build profiling (`--profile`) with cache hit rate, per-page timing, and parallel rendering stats
 - Structured diagnostics with colored terminal output
 
 ## Quick Start
@@ -50,7 +53,7 @@ site/
     posts/           # Blog posts (Markdown + frontmatter)
     pages/           # Static pages
   templates/         # Tera HTML templates (optional, defaults built-in)
-  public/            # Static assets (copied as-is)
+  public/            # Static assets (copied with content-hash filenames)
   styles.css         # Site stylesheet
 ```
 
