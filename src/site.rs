@@ -410,7 +410,7 @@ fn render_model_pages(
                 }
                 let asset_mappings: std::sync::Arc<
                     std::sync::RwLock<std::collections::HashMap<String, String>>,
-                > = std::sync::Arc::new(std::sync::RwLock::new((*a_manifest).mappings.clone()));
+                > = std::sync::Arc::new(std::sync::RwLock::new(a_manifest.mappings.clone()));
                 let _ = crate::engine::register_asset_url_fn(&mut tera, asset_mappings);
                 let engine = crate::engine::Engine::init_tera_only(tera);
 
