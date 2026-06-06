@@ -8,20 +8,34 @@
 
 ## 功能特性
 
-- Markdown 转 HTML，支持代码语法高亮 (comrak)
+- Markdown 转 HTML，支持代码语法高亮、表格、任务列表 (comrak)
 - TOML frontmatter 支持文章与页面元数据
-- Tera 模板引擎
+- Tera 模板引擎，内置默认模板
 - 自定义路由与模板的 Collection 机制
+- 分类法（标签、分类或自定义分组），支持独立模板
+- 分页归档与分栏页面
 - RSS 订阅源与 Sitemap 自动生成
 - 内置开发服务器，文件变更自动重新构建
 - 内容哈希实现缓存失效
+- 增量构建，基于内容感知的缓存
 - 草稿支持
+- 构建分析 (`--profile`)，查看缓存命中率与页面渲染耗时
+- 结构化诊断，彩色终端输出
 
 ## 快速开始
 
 ```bash
 # 构建站点
 kiln build --config site/site.config.toml --output dist
+
+# 包含草稿文章
+kiln build --config site/site.config.toml --drafts
+
+# 构建并输出性能分析
+kiln build --config site/site.config.toml --profile
+
+# 仅验证配置和内容，不生成输出
+kiln check --config site/site.config.toml
 
 # 启动开发服务器（自动重新构建）
 kiln serve --config site/site.config.toml --port 4173
@@ -35,7 +49,7 @@ site/
   content/
     posts/           # 博客文章（Markdown + frontmatter）
     pages/           # 静态页面
-  templates/         # Tera HTML 模板
+  templates/         # Tera HTML 模板（可选，内置默认模板）
   public/            # 静态资源（原样复制）
   styles.css         # 站点样式表
 ```
@@ -53,6 +67,52 @@ base_url = "https://example.com"
 name = "作者"
 email = "author@example.com"
 ```
+
+包含 Collections 和分类法的完整示例：
+
+```toml
+[site]
+title = "我的站点"
+base_url = "https://example.com"
+language = "zh-CN"
+
+paginate_by = 10
+paginate_path = "page"
+
+[[collections]]
+name = "posts"
+directory = "posts"
+route = "/posts/{slug}/"
+template = "post.html"
+date_ordered = true
+feed = true
+
+[[taxonomies]]
+name = "tags"
+slug = "tags"
+
+[[menus.main]]
+name = "首页"
+url = "/"
+weight = 1
+```
+
+## CLI 命令
+
+| 命令 | 说明 |
+|------|------|
+| `kiln build` | 构建静态站点到输出目录 |
+| `kiln check` | 验证配置和内容，不生成输出 |
+| `kiln serve` | 启动开发服务器，文件变更自动重新构建 |
+
+### Build 标志
+
+| 标志 | 说明 |
+|------|------|
+| `--config <path>` | 站点配置文件路径（默认：`site/site.config.toml`） |
+| `--output <dir>` | 输出目录（默认：`dist`） |
+| `--drafts` | 构建时包含草稿文章 |
+| `--profile` | 输出详细构建报告，包含缓存与渲染指标 |
 
 ## 从源码构建
 
