@@ -141,7 +141,9 @@ impl Engine {
 
     /// Returns shared access to template sources, used for parallel rendering
     /// where each thread builds its own Tera instance.
-    pub fn shared_template_sources(&self) -> std::sync::Arc<std::collections::HashMap<String, String>> {
+    pub fn shared_template_sources(
+        &self,
+    ) -> std::sync::Arc<std::collections::HashMap<String, String>> {
         std::sync::Arc::new(self.template_sources.clone())
     }
 
@@ -198,8 +200,7 @@ fn extract_template_deps(source: &str) -> Vec<String> {
         };
 
         // Strip whitespace control characters from tag body: {%- ... -%}
-        let inner = tag_content[2..tag_end]
-            .trim_matches(|c: char| c.is_whitespace() || c == '-');
+        let inner = tag_content[2..tag_end].trim_matches(|c: char| c.is_whitespace() || c == '-');
 
         // Check for extends, include, or import
         let directive = if inner.starts_with("extends") {

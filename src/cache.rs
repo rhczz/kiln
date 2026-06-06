@@ -180,11 +180,7 @@ impl BuildCache {
     }
 
     /// Build a 3-level cache key: content_hash:template_hash:config_hash
-    pub fn build_render_hash(
-        content_hash: &str,
-        template_hash: &str,
-        config_hash: &str,
-    ) -> String {
+    pub fn build_render_hash(content_hash: &str, template_hash: &str, config_hash: &str) -> String {
         format!("{}:{}:{}", content_hash, template_hash, config_hash)
     }
 }

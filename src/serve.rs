@@ -127,8 +127,8 @@ pub fn start(
                                         cache.clear_renders();
                                     } else {
                                         // Template-only change → selective invalidation
-                                        let manifest =
-                                            crate::BuildManifest::load(output_dir).unwrap_or_default();
+                                        let manifest = crate::BuildManifest::load(output_dir)
+                                            .unwrap_or_default();
                                         let mut deps_map: std::collections::HashMap<
                                             std::path::PathBuf,
                                             Vec<String>,
@@ -192,7 +192,9 @@ fn classify_rebuild(
     config: &crate::config::SiteConfig,
 ) -> RebuildMode {
     if paths.is_empty() {
-        return RebuildMode::Full { changed_templates: vec![] };
+        return RebuildMode::Full {
+            changed_templates: vec![],
+        };
     }
 
     let template_root = Path::new(&config.paths.templates);
@@ -207,7 +209,9 @@ fn classify_rebuild(
     for path in paths {
         // Config or styles change → full rebuild (no selective invalidation)
         if path == config_path || path.starts_with(styles_path) {
-            return RebuildMode::Full { changed_templates: vec![] };
+            return RebuildMode::Full {
+                changed_templates: vec![],
+            };
         }
         // Template change → track which templates changed
         if path.starts_with(template_root) {
@@ -223,20 +227,26 @@ fn classify_rebuild(
             saw_content = true;
         } else {
             // Unknown path → full rebuild
-            return RebuildMode::Full { changed_templates: vec![] };
+            return RebuildMode::Full {
+                changed_templates: vec![],
+            };
         }
     }
 
     // Template changes → selective invalidation instead of full rebuild
     if !changed_templates.is_empty() {
         if saw_content || saw_public {
-            return RebuildMode::Full { changed_templates: vec![] };
+            return RebuildMode::Full {
+                changed_templates: vec![],
+            };
         }
         return RebuildMode::Full { changed_templates };
     }
 
     if saw_public && saw_content {
-        RebuildMode::Full { changed_templates: vec![] }
+        RebuildMode::Full {
+            changed_templates: vec![],
+        }
     } else if saw_public {
         RebuildMode::Public
     } else {

@@ -76,12 +76,11 @@ pub fn fingerprint_public(public_dir: &Path, output_dir: &Path) -> anyhow::Resul
             let fingerprinted = format!("{}.{}.{}", stem, hash, ext);
 
             // Join parent dir (if any) with the fingerprinted filename
-            let join_with_parent = |base: &str| {
-                match relative.parent().filter(|p| !p.as_os_str().is_empty()) {
+            let join_with_parent =
+                |base: &str| match relative.parent().filter(|p| !p.as_os_str().is_empty()) {
                     Some(parent) => format!("{}/{}", parent.to_string_lossy(), base),
                     None => base.to_string(),
-                }
-            };
+                };
 
             let dest = output_dir.join(join_with_parent(&fingerprinted));
             if let Some(parent) = dest.parent() {
@@ -98,9 +97,7 @@ pub fn fingerprint_public(public_dir: &Path, output_dir: &Path) -> anyhow::Resul
                 std::fs::create_dir_all(parent)?;
             }
             std::fs::copy(entry, &dest)?;
-            manifest
-                .mappings
-                .insert(rel_str.clone(), rel_str);
+            manifest.mappings.insert(rel_str.clone(), rel_str);
         }
     }
 
@@ -143,10 +140,9 @@ fn looks_like_fingerprinted(path: &str) -> bool {
         return false;
     }
     let before_ext = parts[1]; // "logo.a1b2c3d4e5f6" or just "style"
-    before_ext
-        .rsplit('.')
-        .next()
-        .is_some_and(|segment| segment.len() == 12 && segment.chars().all(|c| c.is_ascii_hexdigit()))
+    before_ext.rsplit('.').next().is_some_and(|segment| {
+        segment.len() == 12 && segment.chars().all(|c| c.is_ascii_hexdigit())
+    })
 }
 
 fn collect_files(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
@@ -176,11 +172,7 @@ mod tests {
     use super::*;
 
     fn test_dir(prefix: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "kiln-asset-test-{}-{}",
-            prefix,
-            std::process::id()
-        ))
+        std::env::temp_dir().join(format!("kiln-asset-test-{}-{}", prefix, std::process::id()))
     }
 
     #[test]

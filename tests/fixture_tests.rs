@@ -478,10 +478,7 @@ fn public_assets_are_copied_to_output() {
     let logo_hashed = mappings["images/logo.png"].as_str().unwrap();
     assert!(logo_hashed.contains("logo."));
     assert!(logo_hashed.ends_with(".png"));
-    assert_eq!(
-        fs::read(output.join(logo_hashed)).unwrap(),
-        b"PNG_DATA"
-    );
+    assert_eq!(fs::read(output.join(logo_hashed)).unwrap(), b"PNG_DATA");
 
     // Non-fingerprintable files keep their original names
     assert_eq!(fs::read(output.join("favicon.ico")).unwrap(), b"ICO_DATA");

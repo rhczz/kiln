@@ -108,14 +108,19 @@ pub fn build_with_artifacts(
 
     timer.phase("copy_public");
     let asset_manifest = if !matches!(opts.mode, BuildMode::Content) {
-        let manifest = crate::asset::fingerprint_public(Path::new(&config.paths.public), output_dir)?;
+        let manifest =
+            crate::asset::fingerprint_public(Path::new(&config.paths.public), output_dir)?;
         manifest.save(output_dir)?;
         crate::asset::prune_stale(&manifest, output_dir)?;
         if let Some(cache) = cache.as_mut() {
             for (orig, hashed) in &manifest.mappings {
                 cache.store_public_hash(
                     PathBuf::from(orig),
-                    if orig == hashed { orig.clone() } else { hashed.clone() },
+                    if orig == hashed {
+                        orig.clone()
+                    } else {
+                        hashed.clone()
+                    },
                 );
                 cache.add_public_output(output_dir.join(hashed));
             }
@@ -358,7 +363,11 @@ fn render_model_pages(
     let shared_site_model = Arc::new(site_model.clone());
 
     let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4))
+        .worker_threads(
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4),
+        )
         .build()?;
 
     let results: Vec<(usize, anyhow::Result<String>)> = rt.block_on(async {
@@ -379,7 +388,10 @@ fn render_model_pages(
                 let mut tera = tera::Tera::default();
                 for (name, source) in templates.iter() {
                     if let Err(e) = tera.add_raw_template(name, source) {
-                        return (idx, Err(anyhow::anyhow!("Failed to add template {}: {}", name, e)));
+                        return (
+                            idx,
+                            Err(anyhow::anyhow!("Failed to add template {}: {}", name, e)),
+                        );
                     }
                 }
                 let engine = crate::engine::Engine::init_tera_only(tera);
@@ -417,8 +429,9 @@ fn render_model_pages(
     });
 
     // Phase 4: write results in order, update cache
-    results.into_iter().try_for_each(
-        |(idx, result)| -> anyhow::Result<()> {
+    results
+        .into_iter()
+        .try_for_each(|(idx, result)| -> anyhow::Result<()> {
             let html = result?;
             let page = &site_model.pages[idx];
             let output_path = env.output_dir.join(&page.output_path);
@@ -436,8 +449,7 @@ fn render_model_pages(
                 }
             }
             Ok(())
-        },
-    )?;
+        })?;
 
     Ok(())
 }
@@ -458,9 +470,7 @@ fn render_one_page(
             render_single(env, item, &page.template, is_article)
         }
         model::PageKind::Home => render_home_page(env, site_model, None),
-        model::PageKind::Section => {
-            render_section_page(env, site_model, page, &page.url, None)
-        }
+        model::PageKind::Section => render_section_page(env, site_model, page, &page.url, None),
         model::PageKind::TaxonomyIndex => render_taxonomy_index_page(env, site_model, page),
         model::PageKind::Term => render_term_page(env, site_model, page, &page.url, None),
         model::PageKind::NotFound => render_not_found_page(env),
@@ -1038,7 +1048,13 @@ fn record_manifest_entries(
             .unwrap_or_else(|| page.output_path.to_string_lossy().to_string());
         let template_deps = page_template_deps(engine, page);
         let template_hash = template_deps_hash(engine, &template_deps);
-        manifest.record(source, vec![page.output_path.clone()], content_hash, template_deps, template_hash);
+        manifest.record(
+            source,
+            vec![page.output_path.clone()],
+            content_hash,
+            template_deps,
+            template_hash,
+        );
     }
 
     manifest.record(

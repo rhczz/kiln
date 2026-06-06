@@ -173,7 +173,13 @@ mod tests {
     fn prunes_removed_sources() {
         let mut manifest = BuildManifest::default();
         let (deps, hash) = empty_deps();
-        manifest.record(PathBuf::from("a.md"), vec![], "h".into(), deps.clone(), hash.clone());
+        manifest.record(
+            PathBuf::from("a.md"),
+            vec![],
+            "h".into(),
+            deps.clone(),
+            hash.clone(),
+        );
         manifest.record(PathBuf::from("b.md"), vec![], "h".into(), deps, hash);
 
         let current: HashMap<PathBuf, String> =
