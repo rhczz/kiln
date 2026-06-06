@@ -9,17 +9,26 @@ use crate::timing::BuildTimer;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-pub fn build(config: &SiteConfig, output_dir: &Path, include_drafts: bool) -> anyhow::Result<()> {
+pub fn build(
+    config: &SiteConfig,
+    output_dir: &Path,
+    include_drafts: bool,
+    profile: bool,
+) -> anyhow::Result<()> {
     let artifacts = BuildArtifacts::load(config)?;
-    build_with_artifacts(
-        config,
-        output_dir,
+    let opts = BuildOptions {
         include_drafts,
-        BuildMode::Full,
-        None,
-        &artifacts,
-        true,
-    )
+        mode: BuildMode::Full,
+        emit_report: true,
+        profile,
+    };
+
+    if profile {
+        let mut cache = BuildCache::new();
+        build_with_artifacts(config, output_dir, Some(&mut cache), &artifacts, opts)
+    } else {
+        build_with_artifacts(config, output_dir, None, &artifacts, opts)
+    }
 }
 
 pub fn build_public_incremental(
@@ -32,11 +41,14 @@ pub fn build_public_incremental(
     build_with_artifacts(
         config,
         output_dir,
-        include_drafts,
-        BuildMode::Public,
         Some(cache),
         artifacts,
-        true,
+        BuildOptions {
+            include_drafts,
+            mode: BuildMode::Public,
+            emit_report: true,
+            profile: false,
+        },
     )
 }
 
@@ -45,6 +57,13 @@ pub enum BuildMode {
     Full,
     Content,
     Public,
+}
+
+pub struct BuildOptions {
+    pub include_drafts: bool,
+    pub mode: BuildMode,
+    pub emit_report: bool,
+    pub profile: bool,
 }
 
 pub struct BuildArtifacts {
@@ -64,23 +83,29 @@ impl BuildArtifacts {
 pub fn build_with_artifacts(
     config: &SiteConfig,
     output_dir: &Path,
-    include_drafts: bool,
-    mode: BuildMode,
     mut cache: Option<&mut BuildCache>,
     artifacts: &BuildArtifacts,
-    emit_report: bool,
+    opts: BuildOptions,
 ) -> anyhow::Result<()> {
     let collections = effective_collections(config);
-    let mut timer = BuildTimer::new();
+    let mut timer = if opts.profile {
+        BuildTimer::with_profile()
+    } else {
+        BuildTimer::new()
+    };
+    let mut diagnostics = crate::DiagnosticCollector::new();
+    if let Some(cache) = cache.as_mut() {
+        cache.reset_stats();
+    }
 
     timer.phase("prepare_output");
-    if matches!(mode, BuildMode::Full) && output_dir.exists() {
+    if matches!(opts.mode, BuildMode::Full) && output_dir.exists() {
         std::fs::remove_dir_all(output_dir)?;
     }
     std::fs::create_dir_all(output_dir)?;
 
     timer.phase("copy_public");
-    match (mode, cache.as_mut()) {
+    match (opts.mode, cache.as_mut()) {
         (BuildMode::Content, _) => {}
         (BuildMode::Public, Some(cache)) => {
             copy_public_incremental(Path::new(&config.paths.public), output_dir, cache)?
@@ -92,7 +117,7 @@ pub fn build_with_artifacts(
         (BuildMode::Full, None) => copy_dir(Path::new(&config.paths.public), output_dir)?,
     }
 
-    if matches!(mode, BuildMode::Public) {
+    if matches!(opts.mode, BuildMode::Public) {
         rewrite_404_stylesheet(output_dir, &artifacts.style_asset)?;
         timer.finish();
         eprintln!("Public build done in {}ms", timer.total_ms());
@@ -107,11 +132,11 @@ pub fn build_with_artifacts(
                 content::load_collection_cached(
                     &config.paths.content,
                     collection,
-                    include_drafts,
+                    opts.include_drafts,
                     cache,
                 )?
             } else {
-                content::load_collection(&config.paths.content, collection, include_drafts)?
+                content::load_collection(&config.paths.content, collection, opts.include_drafts)?
             };
             items.extend(loaded);
         }
@@ -132,15 +157,16 @@ pub fn build_with_artifacts(
         &site_model,
         &mut cache,
         &mut current_page_outputs,
+        &mut timer,
     )?;
 
-    if matches!(mode, BuildMode::Full) {
+    if matches!(opts.mode, BuildMode::Full) {
         timer.phase("write_assets");
         artifacts.style_asset.write(output_dir)?;
         write_asset_headers(output_dir)?;
     }
 
-    if matches!(mode, BuildMode::Public | BuildMode::Full) {
+    if matches!(opts.mode, BuildMode::Public | BuildMode::Full) {
         rewrite_404_stylesheet(output_dir, &artifacts.style_asset)?;
     }
 
@@ -189,14 +215,29 @@ pub fn build_with_artifacts(
         .iter()
         .filter(|i| i.year.is_some())
         .count();
-    if emit_report {
+
+    if opts.emit_report {
         if date_ordered_count == 0 {
-            eprintln!(
-                "Warning: no date-ordered items found in {:?}",
-                config.paths.content
+            diagnostics.push(
+                crate::Diagnostic::warning(
+                    std::path::PathBuf::from(&config.paths.content),
+                    "no date-ordered items found".into(),
+                )
+                .with_hint("add a `date` field to frontmatter to enable feeds and archives"),
             );
         }
         timer.print_report(site_model.all_items.len(), date_ordered_count, output_count);
+    }
+
+    diagnostics.emit_all();
+    crate::print_build_summary(&diagnostics);
+
+    if opts.profile {
+        if let Some(cache) = cache.as_ref() {
+            let (hits, misses) = cache.cache_stats();
+            timer.set_cache_stats(hits, misses);
+        }
+        timer.print_profile_report();
     }
 
     Ok(())
@@ -217,29 +258,69 @@ struct RenderEnv<'a> {
     output_dir: &'a Path,
 }
 
+struct RenderedPage {
+    html: String,
+    rendered: bool,
+}
+
+impl RenderedPage {
+    fn rendered(html: String) -> Self {
+        Self {
+            html,
+            rendered: true,
+        }
+    }
+
+    fn cached(html: String) -> Self {
+        Self {
+            html,
+            rendered: false,
+        }
+    }
+}
+
 fn render_model_pages(
     env: &RenderEnv<'_>,
     site_model: &model::SiteModel,
     cache: &mut Option<&mut BuildCache>,
     current_page_outputs: &mut HashSet<PathBuf>,
+    timer: &mut BuildTimer,
 ) -> anyhow::Result<()> {
     for page in &site_model.pages {
         let output_path = env.output_dir.join(&page.output_path);
         current_page_outputs.insert(output_path.clone());
 
-        let html = match page.kind {
-            model::PageKind::Single => render_single_page(env, page, cache)?,
-            model::PageKind::Home => render_home_page(env, site_model, None)?,
-            model::PageKind::Section => {
-                render_section_page(env, site_model, page, &page.url, None)?
+        timer.start_page(&page.url, &page.template);
+        let result = (|| -> anyhow::Result<RenderedPage> {
+            Ok(match page.kind {
+                model::PageKind::Single => render_single_page(env, page, cache)?,
+                model::PageKind::Home => {
+                    RenderedPage::rendered(render_home_page(env, site_model, None)?)
+                }
+                model::PageKind::Section => RenderedPage::rendered(render_section_page(
+                    env, site_model, page, &page.url, None,
+                )?),
+                model::PageKind::TaxonomyIndex => {
+                    RenderedPage::rendered(render_taxonomy_index_page(env, site_model, page)?)
+                }
+                model::PageKind::Term => RenderedPage::rendered(render_term_page(
+                    env, site_model, page, &page.url, None,
+                )?),
+                model::PageKind::NotFound => RenderedPage::rendered(render_not_found_page(env)?),
+                model::PageKind::Paginate => {
+                    RenderedPage::rendered(render_paginate_page(env, site_model, page)?)
+                }
+            })
+        })();
+        let rendered = match result {
+            Ok(rendered) => rendered,
+            Err(err) => {
+                timer.end_page(false);
+                return Err(err);
             }
-            model::PageKind::TaxonomyIndex => render_taxonomy_index_page(env, site_model, page)?,
-            model::PageKind::Term => render_term_page(env, site_model, page, &page.url, None)?,
-            model::PageKind::NotFound => render_not_found_page(env)?,
-            model::PageKind::Paginate => render_paginate_page(env, site_model, page)?,
         };
-
-        write_page_if_changed(&output_path, &html)?;
+        timer.end_page(rendered.rendered);
+        write_page_if_changed(&output_path, &rendered.html)?;
     }
     Ok(())
 }
@@ -248,7 +329,7 @@ fn render_single_page(
     env: &RenderEnv<'_>,
     page: &model::Page,
     cache: &mut Option<&mut BuildCache>,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<RenderedPage> {
     let item = page
         .content_item
         .as_ref()
@@ -258,13 +339,13 @@ fn render_single_page(
     if let Some(cache) = cache.as_mut().map(|c| &mut **c) {
         let render_hash = format!("{}:{}", item.content_hash, page.template);
         if let Some(cached) = cache.cached_render(&item.source_path, &render_hash) {
-            return Ok(cached.to_string());
+            return Ok(RenderedPage::cached(cached.to_string()));
         }
         let rendered = render_single(env, item, &page.template, is_article)?;
         cache.store_render(&item.source_path, render_hash, rendered.clone());
-        Ok(rendered)
+        Ok(RenderedPage::rendered(rendered))
     } else {
-        render_single(env, item, &page.template, is_article)
+        render_single(env, item, &page.template, is_article).map(RenderedPage::rendered)
     }
 }
 
@@ -325,7 +406,7 @@ fn render_home_page(
     let paginator = paginator
         .cloned()
         .or_else(|| first_page_paginator_for_home(env, &archive_items));
-    let archive_items = paginate_content_items(&archive_items, paginator.as_ref());
+    let archive_items = paginate_items(&archive_items, paginator.as_ref());
     ctx.insert("archive", &make_archive(&archive_items));
     if let Some(p) = paginator.as_ref() {
         ctx.insert("paginator", p);
@@ -357,8 +438,8 @@ fn render_section_page(
     let items = section_items(site_model, base_url);
     let paginator = paginator
         .cloned()
-        .or_else(|| first_page_paginator_for_section(env, &items, base_url));
-    let items = paginate_item_values(&items, paginator.as_ref());
+        .or_else(|| first_page_paginator(env, &items, base_url));
+    let items = paginate_items(&items, paginator.as_ref());
 
     ctx.insert(
         "section",
@@ -438,8 +519,8 @@ fn render_term_page(
                 .collect();
             let paginator = paginator
                 .cloned()
-                .or_else(|| first_page_paginator_for_term(env, &items, base_url));
-            let items = paginate_item_values(&items, paginator.as_ref());
+                .or_else(|| first_page_paginator(env, &items, base_url));
+            let items = paginate_items(&items, paginator.as_ref());
 
             ctx.insert(
                 "term",
@@ -589,21 +670,7 @@ fn first_page_paginator_for_home(
     )
 }
 
-fn first_page_paginator_for_section(
-    env: &RenderEnv<'_>,
-    items: &[serde_json::Value],
-    base_url: &str,
-) -> Option<crate::paginator::Paginator> {
-    build_paginator_for_url(
-        items,
-        env.config.paginate_by,
-        base_url,
-        base_url,
-        &env.config.paginate_path,
-    )
-}
-
-fn first_page_paginator_for_term(
+fn first_page_paginator(
     env: &RenderEnv<'_>,
     items: &[serde_json::Value],
     base_url: &str,
@@ -633,20 +700,10 @@ fn section_items(site_model: &model::SiteModel, section_url: &str) -> Vec<serde_
         .collect()
 }
 
-fn paginate_content_items<'a>(
-    items: &'a [&'a ContentItem],
+fn paginate_items<T: Clone>(
+    items: &[T],
     paginator: Option<&crate::paginator::Paginator>,
-) -> Vec<&'a ContentItem> {
-    let Some(paginator) = paginator else {
-        return items.to_vec();
-    };
-    slice_for_page(items, paginator)
-}
-
-fn paginate_item_values(
-    items: &[serde_json::Value],
-    paginator: Option<&crate::paginator::Paginator>,
-) -> Vec<serde_json::Value> {
+) -> Vec<T> {
     let Some(paginator) = paginator else {
         return items.to_vec();
     };
@@ -1056,6 +1113,7 @@ fn copy_dir_recording(src: &Path, dst: &Path, cache: &mut BuildCache) -> anyhow:
 
 fn copy_public_incremental(src: &Path, dst: &Path, cache: &mut BuildCache) -> anyhow::Result<()> {
     if !src.exists() {
+        clear_recorded_public_outputs(cache)?;
         return Ok(());
     }
 
@@ -1066,6 +1124,15 @@ fn copy_public_incremental(src: &Path, dst: &Path, cache: &mut BuildCache) -> an
         let _ = std::fs::remove_file(removed);
     }
     cache.replace_public_outputs(current_outputs);
+    Ok(())
+}
+
+fn clear_recorded_public_outputs(cache: &mut BuildCache) -> anyhow::Result<()> {
+    let recorded: Vec<PathBuf> = cache.public_outputs().iter().cloned().collect();
+    for removed in recorded {
+        let _ = std::fs::remove_file(removed);
+    }
+    cache.replace_public_outputs(HashSet::new());
     Ok(())
 }
 
@@ -1235,7 +1302,7 @@ tags: ["Test"]
             menus: Default::default(),
         };
 
-        build(&config, &output, false).unwrap();
+        build(&config, &output, false, false).unwrap();
 
         let index = read(&output.join("index.html"));
         assert!(index.contains(r#"<link rel="stylesheet" href="/assets/styles."#));
@@ -1323,7 +1390,7 @@ Content here."#,
             menus: Default::default(),
         };
 
-        build(&config, &output, false).unwrap();
+        build(&config, &output, false, false).unwrap();
 
         let index = read(&output.join("index.html"));
         assert!(

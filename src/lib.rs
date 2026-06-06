@@ -24,8 +24,10 @@ pub use config::{
     AuthorConfig, CollectionConfig, FeedConfig, MenuItemConfig, PathsConfig, SiteConfig, SiteMeta,
     TaxonomyConfig,
 };
-pub use diagnostic::{Diagnostic, DiagnosticLevel};
+pub use diagnostic::{
+    print_build_summary, Diagnostic, DiagnosticCollector, DiagnosticLevel, TemplateFrame,
+};
 pub use manifest::{BuildManifest, ManifestEntry};
 pub use model::{PageKind, SiteModel};
 pub use render::{Heading, RenderOutput};
-pub use site::{build, build_with_artifacts, BuildArtifacts, BuildMode};
+pub use site::{build, build_with_artifacts, BuildArtifacts, BuildMode, BuildOptions};

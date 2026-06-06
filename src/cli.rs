@@ -21,6 +21,9 @@ pub enum Command {
         /// Include draft posts
         #[arg(long)]
         drafts: bool,
+        /// Emit detailed build profile with cache/render metrics
+        #[arg(long)]
+        profile: bool,
     },
     /// Validate site config and content without building
     Check {
@@ -50,9 +53,10 @@ pub fn run() -> anyhow::Result<()> {
             config,
             output,
             drafts,
+            profile,
         } => {
             let (site_config, _base_dir) = crate::config::SiteConfig::load(&config)?;
-            crate::site::build(&site_config, &output, drafts)?;
+            crate::site::build(&site_config, &output, drafts, profile)?;
         }
         Command::Check { config } => {
             let (site_config, _base_dir) = crate::config::SiteConfig::load(&config)?;
@@ -63,11 +67,14 @@ pub fn run() -> anyhow::Result<()> {
             crate::site::build_with_artifacts(
                 &site_config,
                 &temp_output,
-                false,
-                crate::site::BuildMode::Full,
                 None,
                 &artifacts,
-                false,
+                crate::site::BuildOptions {
+                    include_drafts: false,
+                    mode: crate::site::BuildMode::Full,
+                    emit_report: false,
+                    profile: false,
+                },
             )?;
             eprintln!("Check passed.");
         }

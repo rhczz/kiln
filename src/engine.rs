@@ -51,9 +51,19 @@ impl Engine {
     }
 
     pub fn render(&self, template: &str, context: &tera::Context) -> anyhow::Result<String> {
-        self.tera
-            .render(template, context)
-            .with_context(|| format!("Failed to render template '{}'", template))
+        self.tera.render(template, context).map_err(|e| {
+            let stack = vec![crate::TemplateFrame {
+                template: template.to_string(),
+                line: None,
+            }];
+            let mut msg = format!("Failed to render template '{}': {}", template, e);
+            if let Some(source) = std::error::Error::source(&e) {
+                msg.push_str(&format!("\n  caused by: {}", source));
+            }
+            let diag = crate::Diagnostic::error(std::path::PathBuf::from(template), msg)
+                .with_template_stack(stack);
+            anyhow::anyhow!("{}", diag)
+        })
     }
 
     pub fn template_exists(&self, name: &str) -> bool {
