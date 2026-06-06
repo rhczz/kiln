@@ -12,6 +12,14 @@ pub struct SiteConfig {
     pub feed: FeedConfig,
     #[serde(default)]
     pub collections: Vec<CollectionConfig>,
+    #[serde(default)]
+    pub taxonomies: Vec<TaxonomyConfig>,
+    #[serde(default)]
+    pub paginate_by: usize,
+    #[serde(default = "default_paginate_path")]
+    pub paginate_path: String,
+    #[serde(default, rename = "menu")]
+    pub menus: std::collections::HashMap<String, Vec<MenuItemConfig>>,
 
     /// 所有未识别的配置表自动透传给模板，编译器不解析其结构
     #[serde(flatten)]
@@ -71,6 +79,10 @@ fn default_language() -> String {
     "en".into()
 }
 
+fn default_paginate_path() -> String {
+    "page".into()
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct SiteMeta {
     pub title: String,
@@ -106,6 +118,33 @@ impl Default for FeedConfig {
 
 fn default_feed_count() -> usize {
     20
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TaxonomyConfig {
+    pub name: String,
+    #[serde(default)]
+    pub slug: String,
+    #[serde(default)]
+    pub template: String,
+}
+
+impl TaxonomyConfig {
+    pub fn effective_slug(&self) -> &str {
+        if self.slug.is_empty() {
+            &self.name
+        } else {
+            &self.slug
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MenuItemConfig {
+    pub name: String,
+    pub url: String,
+    #[serde(default)]
+    pub weight: i32,
 }
 
 pub fn default_collections() -> Vec<CollectionConfig> {

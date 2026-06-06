@@ -101,6 +101,10 @@ featured: {}
             feed: FeedConfig { item_count: 50 },
             collections: vec![],
             extra: toml::Value::Table(Default::default()),
+            taxonomies: vec![],
+            paginate_by: 0,
+            paginate_path: "page".into(),
+            menus: Default::default(),
         }
     }
 }

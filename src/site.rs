@@ -1,7 +1,10 @@
+use anyhow::Context;
+
 use crate::cache::BuildCache;
 use crate::config::{self as site_config, CollectionConfig, SiteConfig};
 use crate::content::{self, ContentItem};
 use crate::engine::Engine;
+use crate::model;
 use crate::timing::BuildTimer;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -15,6 +18,7 @@ pub fn build(config: &SiteConfig, output_dir: &Path, include_drafts: bool) -> an
         BuildMode::Full,
         None,
         &artifacts,
+        true,
     )
 }
 
@@ -32,6 +36,7 @@ pub fn build_public_incremental(
         BuildMode::Public,
         Some(cache),
         artifacts,
+        true,
     )
 }
 
@@ -63,6 +68,7 @@ pub fn build_with_artifacts(
     mode: BuildMode,
     mut cache: Option<&mut BuildCache>,
     artifacts: &BuildArtifacts,
+    emit_report: bool,
 ) -> anyhow::Result<()> {
     let collections = effective_collections(config);
     let mut timer = BuildTimer::new();
@@ -94,39 +100,39 @@ pub fn build_with_artifacts(
     }
 
     timer.phase("load_content");
-    let mut all_items: Vec<ContentItem> = Vec::new();
-    for collection in &collections {
-        let items = if let Some(cache) = cache.as_deref_mut() {
-            content::load_collection_cached(
-                &config.paths.content,
-                collection,
-                include_drafts,
-                cache,
-            )?
-        } else {
-            content::load_collection(&config.paths.content, collection, include_drafts)?
-        };
-        all_items.extend(items);
-    }
+    let all_items: Vec<ContentItem> = {
+        let mut items: Vec<ContentItem> = Vec::new();
+        for collection in &collections {
+            let loaded = if let Some(cache) = cache.as_deref_mut() {
+                content::load_collection_cached(
+                    &config.paths.content,
+                    collection,
+                    include_drafts,
+                    cache,
+                )?
+            } else {
+                content::load_collection(&config.paths.content, collection, include_drafts)?
+            };
+            items.extend(loaded);
+        }
+        items
+    };
 
     timer.phase("render_pages");
+    let site_model = model::build_site_model(all_items, &collections, config);
     let mut current_page_outputs: HashSet<PathBuf> = HashSet::new();
     let render_env = RenderEnv {
         engine: &artifacts.engine,
         config,
         style_asset: &artifacts.style_asset,
-        collections: &collections,
         output_dir,
     };
-    render_items(
+    render_model_pages(
         &render_env,
-        &all_items,
+        &site_model,
         &mut cache,
         &mut current_page_outputs,
     )?;
-
-    timer.phase("render_home");
-    render_home(&render_env, output_dir, &all_items)?;
 
     if matches!(mode, BuildMode::Full) {
         timer.phase("write_assets");
@@ -138,20 +144,24 @@ pub fn build_with_artifacts(
         rewrite_404_stylesheet(output_dir, &artifacts.style_asset)?;
     }
 
+    timer.phase("generate_feeds");
+    let feed_items = collect_feed_items(&collections, &site_model.all_items);
+    let rss = crate::rss::generate(config, &feed_items);
+    std::fs::write(output_dir.join("rss.xml"), rss)?;
+
+    let sitemap_files = crate::sitemap::generate(config, &site_model.pages);
+    for (filename, content) in &sitemap_files {
+        let sitemap_path = output_dir.join(filename);
+        std::fs::write(&sitemap_path, content)?;
+        current_page_outputs.insert(sitemap_path);
+    }
+
     let output_count = current_page_outputs.len();
     if let Some(cache) = cache.as_mut() {
         let previous_outputs = cache.page_outputs().clone();
         prune_removed_outputs(output_dir, &previous_outputs, &current_page_outputs)?;
         cache.replace_page_outputs(current_page_outputs);
     }
-
-    timer.phase("generate_feeds");
-    let feed_items = collect_feed_items(&collections, &all_items);
-    let rss = crate::rss::generate(config, &feed_items);
-    std::fs::write(output_dir.join("rss.xml"), rss)?;
-
-    let sitemap = crate::sitemap::generate(config, &all_items);
-    std::fs::write(output_dir.join("sitemap.xml"), sitemap)?;
 
     std::fs::write(
         output_dir.join("robots.txt"),
@@ -161,15 +171,33 @@ pub fn build_with_artifacts(
         ),
     )?;
 
+    let mut manifest = crate::BuildManifest {
+        config_hash: build_config_hash(config),
+        ..Default::default()
+    };
+    record_manifest_entries(
+        &mut manifest,
+        &site_model,
+        &artifacts.style_asset,
+        &sitemap_files,
+    );
+    manifest.save(output_dir)?;
+
     timer.finish();
-    let date_ordered_count = all_items.iter().filter(|i| i.year.is_some()).count();
-    if date_ordered_count == 0 {
-        eprintln!(
-            "Warning: no date-ordered items found in {:?}",
-            config.paths.content
-        );
+    let date_ordered_count = site_model
+        .all_items
+        .iter()
+        .filter(|i| i.year.is_some())
+        .count();
+    if emit_report {
+        if date_ordered_count == 0 {
+            eprintln!(
+                "Warning: no date-ordered items found in {:?}",
+                config.paths.content
+            );
+        }
+        timer.print_report(site_model.all_items.len(), date_ordered_count, output_count);
     }
-    timer.print_report(all_items.len(), date_ordered_count, output_count);
 
     Ok(())
 }
@@ -186,55 +214,76 @@ struct RenderEnv<'a> {
     engine: &'a Engine,
     config: &'a SiteConfig,
     style_asset: &'a StyleAsset,
-    collections: &'a [CollectionConfig],
     output_dir: &'a Path,
 }
 
-fn render_items(
+fn render_model_pages(
     env: &RenderEnv<'_>,
-    all_items: &[ContentItem],
+    site_model: &model::SiteModel,
     cache: &mut Option<&mut BuildCache>,
     current_page_outputs: &mut HashSet<PathBuf>,
 ) -> anyhow::Result<()> {
-    for item in all_items {
-        let collection = env
-            .collections
-            .iter()
-            .find(|c| c.name == item.collection)
-            .ok_or_else(|| anyhow::anyhow!("unknown collection '{}'", item.collection))?;
-
-        let output_path = page_output_path(env.output_dir, &item.url);
+    for page in &site_model.pages {
+        let output_path = env.output_dir.join(&page.output_path);
         current_page_outputs.insert(output_path.clone());
 
-        let html = if let Some(cache) = cache.as_mut().map(|cache| &mut **cache) {
-            let render_hash = format!("{}:{}", item.content_hash, collection.template);
-            if let Some(cached) = cache.cached_render(&item.source_path, &render_hash) {
-                cached.to_string()
-            } else {
-                let rendered = render_item(env, collection, item)?;
-                cache.store_render(&item.source_path, render_hash, rendered.clone());
-                rendered
+        let html = match page.kind {
+            model::PageKind::Single => render_single_page(env, page, cache)?,
+            model::PageKind::Home => render_home_page(env, site_model, None)?,
+            model::PageKind::Section => {
+                render_section_page(env, site_model, page, &page.url, None)?
             }
-        } else {
-            render_item(env, collection, item)?
+            model::PageKind::TaxonomyIndex => render_taxonomy_index_page(env, site_model, page)?,
+            model::PageKind::Term => render_term_page(env, site_model, page, &page.url, None)?,
+            model::PageKind::NotFound => render_not_found_page(env)?,
+            model::PageKind::Paginate => render_paginate_page(env, site_model, page)?,
         };
 
         write_page_if_changed(&output_path, &html)?;
     }
-
     Ok(())
 }
 
-fn render_item(
+fn render_single_page(
     env: &RenderEnv<'_>,
-    collection: &CollectionConfig,
+    page: &model::Page,
+    cache: &mut Option<&mut BuildCache>,
+) -> anyhow::Result<String> {
+    let item = page
+        .content_item
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("single page missing content item: {}", page.url))?;
+    let is_article = item.raw_date.is_some();
+
+    if let Some(cache) = cache.as_mut().map(|c| &mut **c) {
+        let render_hash = format!("{}:{}", item.content_hash, page.template);
+        if let Some(cached) = cache.cached_render(&item.source_path, &render_hash) {
+            return Ok(cached.to_string());
+        }
+        let rendered = render_single(env, item, &page.template, is_article)?;
+        cache.store_render(&item.source_path, render_hash, rendered.clone());
+        Ok(rendered)
+    } else {
+        render_single(env, item, &page.template, is_article)
+    }
+}
+
+fn render_single(
+    env: &RenderEnv<'_>,
     item: &ContentItem,
+    template: &str,
+    is_article: bool,
 ) -> anyhow::Result<String> {
     let mut ctx = tera::Context::new();
     insert_template_context(&mut ctx, env.config, env.style_asset);
     ctx.insert("page", &make_item_context(item));
-
-    let body = env.engine.render(&collection.template, &ctx)?;
+    let body = env.engine.render(template, &ctx)?;
+    let body = if !item.shortcodes.is_empty() {
+        crate::shortcode::postprocess(&body, &item.shortcodes, env.engine)
+            .with_context(|| format!("Failed to process shortcodes for {:?}", item.source_path))?
+    } else {
+        body
+    };
     let dir_path = item.url.trim_start_matches('/').trim_end_matches('/');
     wrap_with_layout(
         env,
@@ -242,36 +291,441 @@ fn render_item(
         &item.description,
         &body,
         dir_path,
-        collection.date_ordered,
+        is_article,
     )
 }
 
-fn render_home(
+fn render_home_page(
     env: &RenderEnv<'_>,
-    output_dir: &Path,
-    all_items: &[ContentItem],
-) -> anyhow::Result<()> {
+    site_model: &model::SiteModel,
+    paginator: Option<&crate::paginator::Paginator>,
+) -> anyhow::Result<String> {
     let mut ctx = tera::Context::new();
     insert_template_context(&mut ctx, env.config, env.style_asset);
 
-    let featured: Vec<&ContentItem> = all_items.iter().filter(|i| i.featured).take(6).collect();
-    let featured_ctx: Vec<serde_json::Value> = featured.iter().map(|i| make_item_base(i)).collect();
-    ctx.insert("featured_posts", &featured_ctx);
+    let featured: Vec<&ContentItem> = site_model
+        .all_items
+        .iter()
+        .filter(|i| i.featured)
+        .take(6)
+        .collect();
+    ctx.insert(
+        "featured_posts",
+        &featured
+            .iter()
+            .map(|i| make_item_base(i))
+            .collect::<Vec<_>>(),
+    );
 
-    let archive_items: Vec<&ContentItem> = all_items.iter().filter(|i| i.year.is_some()).collect();
-    let archive = make_archive(&archive_items);
-    ctx.insert("archive", &archive);
+    let archive_items: Vec<&ContentItem> = site_model
+        .all_items
+        .iter()
+        .filter(|i| i.year.is_some())
+        .collect();
+    let paginator = paginator
+        .cloned()
+        .or_else(|| first_page_paginator_for_home(env, &archive_items));
+    let archive_items = paginate_content_items(&archive_items, paginator.as_ref());
+    ctx.insert("archive", &make_archive(&archive_items));
+    if let Some(p) = paginator.as_ref() {
+        ctx.insert("paginator", p);
+    }
 
-    let body = env.engine.render("home.html", &ctx)?;
-    let wrapped = wrap_with_layout(env, "", &env.config.site.description, &body, "", false)?;
-    write_page_if_changed(&output_dir.join("index.html"), &wrapped)?;
-    Ok(())
+    let template = env.engine.resolve_template(&model::PageKind::Home, None);
+    let body = env.engine.render(&template, &ctx)?;
+    let title = paginator.as_ref().map_or(String::new(), |p| {
+        if p.current_index <= 1 {
+            String::new()
+        } else {
+            format!("Page {}", p.current_index)
+        }
+    });
+    wrap_with_layout(env, &title, &env.config.site.description, &body, "", false)
 }
 
-fn page_output_path(output_dir: &Path, url: &str) -> PathBuf {
-    output_dir
-        .join(url.trim_start_matches('/').trim_end_matches('/'))
-        .join("index.html")
+fn render_section_page(
+    env: &RenderEnv<'_>,
+    site_model: &model::SiteModel,
+    page: &model::Page,
+    base_url: &str,
+    paginator: Option<&crate::paginator::Paginator>,
+) -> anyhow::Result<String> {
+    let mut ctx = tera::Context::new();
+    insert_template_context(&mut ctx, env.config, env.style_asset);
+
+    let section = site_model.sections.values().find(|s| s.url == base_url);
+    let items = section_items(site_model, base_url);
+    let paginator = paginator
+        .cloned()
+        .or_else(|| first_page_paginator_for_section(env, &items, base_url));
+    let items = paginate_item_values(&items, paginator.as_ref());
+
+    ctx.insert(
+        "section",
+        &section_context(section, &items, &site_model.sections),
+    );
+    if let Some(p) = paginator.as_ref() {
+        ctx.insert("paginator", p);
+    }
+
+    let collection = section.map(|s| s.collection.as_str());
+    let template = env
+        .engine
+        .resolve_template(&model::PageKind::Section, collection);
+    let body = env.engine.render(&template, &ctx)?;
+    let dir_path = page.url.trim_start_matches('/').trim_end_matches('/');
+    wrap_with_layout(env, &page.title, &page.description, &body, dir_path, false)
+}
+
+fn render_taxonomy_index_page(
+    env: &RenderEnv<'_>,
+    site_model: &model::SiteModel,
+    page: &model::Page,
+) -> anyhow::Result<String> {
+    let mut ctx = tera::Context::new();
+    insert_template_context(&mut ctx, env.config, env.style_asset);
+
+    for taxonomy in site_model.taxonomies.values() {
+        if format!("/{}/", taxonomy.slug) == page.url {
+            ctx.insert(
+                "taxonomy",
+                &serde_json::json!({
+                    "name": taxonomy.name,
+                    "slug": taxonomy.slug,
+                    "terms": taxonomy.terms.iter().map(|t| serde_json::json!({
+                        "name": t.name, "slug": t.slug, "url": t.url,
+                    })).collect::<Vec<_>>(),
+                }),
+            );
+            break;
+        }
+    }
+
+    let template = env
+        .engine
+        .resolve_template(&model::PageKind::TaxonomyIndex, None);
+    let body = env.engine.render(&template, &ctx)?;
+    let dir_path = page.url.trim_start_matches('/').trim_end_matches('/');
+    wrap_with_layout(env, &page.title, &page.description, &body, dir_path, false)
+}
+
+fn render_term_page(
+    env: &RenderEnv<'_>,
+    site_model: &model::SiteModel,
+    page: &model::Page,
+    base_url: &str,
+    paginator: Option<&crate::paginator::Paginator>,
+) -> anyhow::Result<String> {
+    let mut ctx = tera::Context::new();
+    insert_template_context(&mut ctx, env.config, env.style_asset);
+
+    for taxonomy in site_model.taxonomies.values() {
+        if let Some(term) = taxonomy.terms.iter().find(|t| t.url == base_url) {
+            let items: Vec<serde_json::Value> = site_model
+                .all_items
+                .iter()
+                .filter(|item| {
+                    item.taxonomy_terms
+                        .get(&taxonomy.name)
+                        .map(|terms| {
+                            terms
+                                .iter()
+                                .any(|tag| crate::content::slugify(tag) == term.slug)
+                        })
+                        .unwrap_or(false)
+                })
+                .map(make_item_base)
+                .collect();
+            let paginator = paginator
+                .cloned()
+                .or_else(|| first_page_paginator_for_term(env, &items, base_url));
+            let items = paginate_item_values(&items, paginator.as_ref());
+
+            ctx.insert(
+                "term",
+                &serde_json::json!({
+                    "name": term.name,
+                    "slug": term.slug,
+                    "url": term.url,
+                    "taxonomy": taxonomy.name,
+                    "pages": items,
+                }),
+            );
+            if let Some(p) = paginator.as_ref() {
+                ctx.insert("paginator", p);
+            }
+            break;
+        }
+    }
+
+    let taxonomy_slug = base_url
+        .trim_matches('/')
+        .split('/')
+        .next()
+        .map(|s| s.to_string());
+    let template = if !page.template.is_empty() && env.engine.template_exists(&page.template) {
+        page.template.clone()
+    } else {
+        env.engine
+            .resolve_template(&model::PageKind::Term, taxonomy_slug.as_deref())
+    };
+    let body = env.engine.render(&template, &ctx)?;
+    let dir_path = page.url.trim_start_matches('/').trim_end_matches('/');
+    wrap_with_layout(env, &page.title, &page.description, &body, dir_path, false)
+}
+
+fn render_paginate_page(
+    env: &RenderEnv<'_>,
+    site_model: &model::SiteModel,
+    page: &model::Page,
+) -> anyhow::Result<String> {
+    let base_url = derive_paginate_base(&page.url, &env.config.paginate_path);
+
+    if base_url == "/" {
+        let date_ordered: Vec<&ContentItem> = site_model
+            .all_items
+            .iter()
+            .filter(|i| i.year.is_some())
+            .collect();
+        let paginator = build_paginator_for_url(
+            &date_ordered,
+            env.config.paginate_by,
+            &base_url,
+            &page.url,
+            &env.config.paginate_path,
+        );
+        render_home_page(env, site_model, paginator.as_ref())
+    } else if site_model.sections.values().any(|s| s.url == base_url) {
+        let paginator = build_paginator_for_url(
+            &section_items(site_model, &base_url),
+            env.config.paginate_by,
+            &base_url,
+            &page.url,
+            &env.config.paginate_path,
+        );
+        render_section_page(env, site_model, page, &base_url, paginator.as_ref())
+    } else {
+        // Term pagination — find matching term
+        let term = site_model.taxonomies.values().find_map(|taxonomy| {
+            taxonomy
+                .terms
+                .iter()
+                .find(|t| t.url == base_url)
+                .map(|term| (taxonomy.name.clone(), term))
+        });
+        if let Some((taxonomy_name, term)) = term {
+            let term_items: Vec<&ContentItem> = site_model
+                .all_items
+                .iter()
+                .filter(|item| {
+                    item.taxonomy_terms
+                        .get(&taxonomy_name)
+                        .map(|terms| {
+                            terms
+                                .iter()
+                                .any(|tag| crate::content::slugify(tag) == term.slug)
+                        })
+                        .unwrap_or(false)
+                })
+                .collect();
+            let paginator = build_paginator_for_url(
+                &term_items,
+                env.config.paginate_by,
+                &base_url,
+                &page.url,
+                &env.config.paginate_path,
+            );
+            return render_term_page(env, site_model, page, &base_url, paginator.as_ref());
+        }
+        anyhow::bail!("unknown paginate base URL: {}", base_url)
+    }
+}
+
+fn derive_paginate_base(url: &str, paginate_path: &str) -> String {
+    let trimmed = url.trim_matches('/');
+    let segments: Vec<&str> = trimmed.split('/').filter(|s| !s.is_empty()).collect();
+    if segments.len() < 2 {
+        return url.to_string();
+    }
+    let page_segment = segments[segments.len() - 1];
+    let paginate_segment = segments[segments.len() - 2];
+    if paginate_segment != paginate_path || !page_segment.chars().all(|c| c.is_ascii_digit()) {
+        return url.to_string();
+    }
+
+    let base = segments[..segments.len() - 2].join("/");
+    if base.is_empty() {
+        return "/".into();
+    }
+    format!("/{}/", base)
+}
+
+fn build_paginator_for_url<T>(
+    all_items: &[T],
+    per_page: usize,
+    base_url: &str,
+    current_url: &str,
+    paginate_path: &str,
+) -> Option<crate::paginator::Paginator> {
+    if per_page == 0 || all_items.is_empty() {
+        return None;
+    }
+    let paginators = crate::paginator::paginate(all_items.len(), per_page, base_url, paginate_path);
+    paginators
+        .into_iter()
+        .find(|p| p.current_url == current_url)
+}
+
+fn first_page_paginator_for_home(
+    env: &RenderEnv<'_>,
+    items: &[&ContentItem],
+) -> Option<crate::paginator::Paginator> {
+    build_paginator_for_url(
+        items,
+        env.config.paginate_by,
+        "/",
+        "/",
+        &env.config.paginate_path,
+    )
+}
+
+fn first_page_paginator_for_section(
+    env: &RenderEnv<'_>,
+    items: &[serde_json::Value],
+    base_url: &str,
+) -> Option<crate::paginator::Paginator> {
+    build_paginator_for_url(
+        items,
+        env.config.paginate_by,
+        base_url,
+        base_url,
+        &env.config.paginate_path,
+    )
+}
+
+fn first_page_paginator_for_term(
+    env: &RenderEnv<'_>,
+    items: &[serde_json::Value],
+    base_url: &str,
+) -> Option<crate::paginator::Paginator> {
+    build_paginator_for_url(
+        items,
+        env.config.paginate_by,
+        base_url,
+        base_url,
+        &env.config.paginate_path,
+    )
+}
+
+fn render_not_found_page(env: &RenderEnv<'_>) -> anyhow::Result<String> {
+    let mut ctx = tera::Context::new();
+    insert_template_context(&mut ctx, env.config, env.style_asset);
+    let body = env.engine.render("404.html", &ctx)?;
+    wrap_with_layout(env, "Page Not Found", "", &body, "", false)
+}
+
+fn section_items(site_model: &model::SiteModel, section_url: &str) -> Vec<serde_json::Value> {
+    site_model
+        .all_items
+        .iter()
+        .filter(|item| model::url_is_under_section(&item.url, section_url))
+        .map(make_item_base)
+        .collect()
+}
+
+fn paginate_content_items<'a>(
+    items: &'a [&'a ContentItem],
+    paginator: Option<&crate::paginator::Paginator>,
+) -> Vec<&'a ContentItem> {
+    let Some(paginator) = paginator else {
+        return items.to_vec();
+    };
+    slice_for_page(items, paginator)
+}
+
+fn paginate_item_values(
+    items: &[serde_json::Value],
+    paginator: Option<&crate::paginator::Paginator>,
+) -> Vec<serde_json::Value> {
+    let Some(paginator) = paginator else {
+        return items.to_vec();
+    };
+    slice_for_page(items, paginator)
+}
+
+fn slice_for_page<T: Clone>(items: &[T], paginator: &crate::paginator::Paginator) -> Vec<T> {
+    if items.is_empty() {
+        return Vec::new();
+    }
+    let start = paginator
+        .current_index
+        .saturating_sub(1)
+        .saturating_mul(paginator.per_page);
+    let start = start.min(items.len());
+    let end = (start + paginator.per_page).min(items.len());
+    items[start..end].to_vec()
+}
+
+fn section_context(
+    section: Option<&model::Section>,
+    items: &[serde_json::Value],
+    all_sections: &std::collections::HashMap<String, model::Section>,
+) -> serde_json::Value {
+    let sec = match section {
+        Some(s) => s,
+        None => {
+            return serde_json::json!({
+                "title": "",
+                "pages": items,
+                "breadcrumb": [],
+            })
+        }
+    };
+
+    let mut children_sections: Vec<&model::Section> = sec
+        .children_slugs
+        .iter()
+        .filter_map(|key| all_sections.get(key))
+        .collect();
+    children_sections.sort_by(|a, b| {
+        a.weight
+            .cmp(&b.weight)
+            .then_with(|| a.title.cmp(&b.title))
+            .then_with(|| a.url.cmp(&b.url))
+    });
+
+    let children: Vec<serde_json::Value> = children_sections
+        .into_iter()
+        .map(|child| {
+            serde_json::json!({
+                "title": child.title,
+                "slug": child.slug,
+                "url": child.url,
+            })
+        })
+        .collect();
+
+    let parent = sec
+        .parent_slug
+        .as_ref()
+        .and_then(|key| all_sections.get(key))
+        .map(|ps| {
+            serde_json::json!({
+                "title": ps.title,
+                "slug": ps.slug,
+                "url": ps.url,
+            })
+        });
+
+    serde_json::json!({
+        "title": sec.title,
+        "slug": sec.slug,
+        "url": sec.url,
+        "pages": items,
+        "breadcrumb": sec.breadcrumb,
+        "parent": parent,
+        "children": children,
+    })
 }
 
 fn write_page_if_changed(path: &Path, html: &str) -> anyhow::Result<()> {
@@ -345,6 +799,77 @@ fn collect_feed_items<'a>(
     feed_items
 }
 
+fn record_manifest_entries(
+    manifest: &mut crate::BuildManifest,
+    site_model: &model::SiteModel,
+    style_asset: &StyleAsset,
+    sitemap_files: &[(String, String)],
+) {
+    for page in &site_model.pages {
+        let source = page
+            .source_path
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(&page.output_path));
+        let content_hash = page
+            .content_item
+            .as_ref()
+            .map(|item| item.content_hash.clone())
+            .unwrap_or_else(|| page.output_path.to_string_lossy().to_string());
+        manifest.record(source, vec![page.output_path.clone()], content_hash);
+    }
+
+    manifest.record(
+        PathBuf::from("assets/styles.css"),
+        vec![PathBuf::from(&style_asset.output_path)],
+        style_asset.output_path.clone(),
+    );
+    manifest.record(
+        PathBuf::from("generated/rss.xml"),
+        vec![PathBuf::from("rss.xml")],
+        "generated".into(),
+    );
+    manifest.record(
+        PathBuf::from("generated/robots.txt"),
+        vec![PathBuf::from("robots.txt")],
+        "generated".into(),
+    );
+
+    for (filename, _) in sitemap_files {
+        manifest.record(
+            PathBuf::from(format!("generated/{}", filename)),
+            vec![PathBuf::from(filename)],
+            "generated".into(),
+        );
+    }
+}
+
+fn build_config_hash(config: &SiteConfig) -> String {
+    let mut parts = vec![
+        config.site.title.clone(),
+        config.site.subtitle.clone(),
+        config.site.description.clone(),
+        config.site.language.clone(),
+        config.site.base_url.clone(),
+        config.paginate_by.to_string(),
+        config.paginate_path.clone(),
+    ];
+
+    for collection in &config.collections {
+        parts.push(collection.name.clone());
+        parts.push(collection.directory.clone());
+        parts.push(collection.route.clone());
+        parts.push(collection.template.clone());
+    }
+
+    for taxonomy in &config.taxonomies {
+        parts.push(taxonomy.name.clone());
+        parts.push(taxonomy.slug.clone());
+        parts.push(taxonomy.template.clone());
+    }
+
+    content::fingerprint(parts.join("|").as_bytes())
+}
+
 fn wrap_with_layout(
     env: &RenderEnv<'_>,
     title: &str,
@@ -381,20 +906,66 @@ fn insert_template_context(ctx: &mut tera::Context, config: &SiteConfig, style_a
     let theme = serde_json::to_value(&config.extra)
         .expect("toml::Value -> serde_json::Value is infallible");
 
-    // Legacy `config` merges site fields into theme for backward compatibility
-    let mut legacy = match &theme {
-        serde_json::Value::Object(map) => map.clone(),
-        _ => Default::default(),
+    let menus = if config.menus.is_empty() {
+        None
+    } else {
+        let menus: serde_json::Map<String, serde_json::Value> = config
+            .menus
+            .iter()
+            .map(|(name, items)| {
+                let mut sorted = items.clone();
+                sorted.sort_by_key(|item| item.weight);
+                let entries: Vec<serde_json::Value> = sorted
+                    .iter()
+                    .map(|item| {
+                        serde_json::json!({
+                            "name": item.name,
+                            "url": item.url,
+                            "weight": item.weight,
+                        })
+                    })
+                    .collect();
+                (name.clone(), serde_json::Value::Array(entries))
+            })
+            .collect();
+        Some(serde_json::Value::Object(menus))
     };
-    if let Some(site_obj) = site.as_object() {
-        for (key, value) in site_obj {
-            legacy.insert(key.clone(), value.clone());
-        }
-    }
 
     ctx.insert("site", &site);
     ctx.insert("theme", &theme);
-    ctx.insert("config", &serde_json::Value::Object(legacy));
+    ctx.insert(
+        "config",
+        &merge_config_context(&site, &theme, menus.as_ref()),
+    );
+    if let Some(menus) = menus {
+        ctx.insert("menus", &menus);
+    }
+}
+
+fn merge_config_context(
+    site: &serde_json::Value,
+    theme: &serde_json::Value,
+    menus: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let mut merged = serde_json::Map::new();
+
+    if let Some(site_obj) = site.as_object() {
+        for (key, value) in site_obj {
+            merged.insert(key.clone(), value.clone());
+        }
+    }
+
+    if let Some(theme_obj) = theme.as_object() {
+        for (key, value) in theme_obj {
+            merged.insert(key.clone(), value.clone());
+        }
+    }
+
+    if let Some(menus) = menus {
+        merged.insert("menus".into(), menus.clone());
+    }
+
+    serde_json::Value::Object(merged)
 }
 
 fn make_item_base(item: &ContentItem) -> serde_json::Value {
@@ -416,7 +987,9 @@ fn make_item_context(item: &ContentItem) -> serde_json::Value {
     if let Some(obj) = ctx.as_object_mut() {
         obj.insert("body_html".into(), serde_json::json!(item.body_html));
         obj.insert("tags".into(), serde_json::json!(item.tags));
+        obj.insert("taxonomies".into(), serde_json::json!(item.taxonomy_terms));
         obj.insert("type".into(), serde_json::json!(item.collection));
+        obj.insert("toc".into(), serde_json::json!(item.headings));
     }
     ctx
 }
@@ -598,9 +1171,11 @@ fn rewrite_404_stylesheet(output_dir: &Path, style_asset: &StyleAsset) -> anyhow
 
 #[cfg(test)]
 mod tests {
-    use super::build;
+    use super::{build, derive_paginate_base, prune_removed_outputs, section_context};
     use crate::config::{AuthorConfig, FeedConfig, PathsConfig, SiteConfig, SiteMeta};
     use crate::content::ContentItem;
+    use crate::model::{BreadcrumbItem, Section};
+    use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -654,6 +1229,10 @@ tags: ["Test"]
             feed: FeedConfig { item_count: 20 },
             collections: vec![],
             extra: toml::Value::Table(Default::default()),
+            taxonomies: vec![],
+            paginate_by: 0,
+            paginate_path: "page".into(),
+            menus: Default::default(),
         };
 
         build(&config, &output, false).unwrap();
@@ -738,6 +1317,10 @@ Content here."#,
             feed: FeedConfig { item_count: 20 },
             collections: vec![],
             extra: toml::Value::Table(Default::default()),
+            taxonomies: vec![],
+            paginate_by: 0,
+            paginate_path: "page".into(),
+            menus: Default::default(),
         };
 
         build(&config, &output, false).unwrap();
@@ -777,6 +1360,10 @@ Content here."#,
             }),
             feed: FeedConfig { item_count: 20 },
             collections: vec![],
+            taxonomies: vec![],
+            paginate_by: 0,
+            paginate_path: "page".into(),
+            menus: Default::default(),
             extra: toml::Value::Table(
                 vec![
                     ("intro".into(), toml::Value::String("Hello".into())),
@@ -797,13 +1384,10 @@ Content here."#,
 
         let site = ctx.get("site").unwrap();
         let theme = ctx.get("theme").unwrap();
-        let config_legacy = ctx.get("config").unwrap();
 
         assert_eq!(site["title"], "Test");
         assert_eq!(site["stylesheet_href"], "/assets/styles.abc.css");
         assert_eq!(theme["intro"], "Hello");
-        assert_eq!(config_legacy["title"], "Test");
-        assert_eq!(config_legacy["intro"], "Hello");
     }
 
     #[test]
@@ -845,7 +1429,10 @@ Content here."#,
                 featured: false,
                 draft: false,
                 tags: vec![],
+                taxonomy_terms: Default::default(),
                 raw_date: chrono::NaiveDate::from_ymd_opt(2026, 5, 1),
+                headings: vec![],
+                shortcodes: vec![],
             },
             ContentItem {
                 source_path: PathBuf::from("content/notes/2026-06-01-newer.md"),
@@ -864,7 +1451,10 @@ Content here."#,
                 featured: false,
                 draft: false,
                 tags: vec![],
+                taxonomy_terms: Default::default(),
                 raw_date: chrono::NaiveDate::from_ymd_opt(2026, 6, 1),
+                headings: vec![],
+                shortcodes: vec![],
             },
             ContentItem {
                 source_path: PathBuf::from("content/pages/ignored.md"),
@@ -883,7 +1473,10 @@ Content here."#,
                 featured: false,
                 draft: false,
                 tags: vec![],
+                taxonomy_terms: Default::default(),
                 raw_date: None,
+                headings: vec![],
+                shortcodes: vec![],
             },
         ];
 
@@ -891,6 +1484,93 @@ Content here."#,
         assert_eq!(feed_items.len(), 2);
         assert_eq!(feed_items[0].title, "Newer");
         assert_eq!(feed_items[1].title, "Older");
+    }
+
+    #[test]
+    fn derive_paginate_base_strips_only_trailing_paginate_segments() {
+        assert_eq!(derive_paginate_base("/page/2/", "page"), "/");
+        assert_eq!(
+            derive_paginate_base("/docs/page/intro/page/2/", "page"),
+            "/docs/page/intro/"
+        );
+        assert_eq!(
+            derive_paginate_base("/docs/page/intro/", "page"),
+            "/docs/page/intro/"
+        );
+    }
+
+    #[test]
+    fn section_context_sorts_children_by_weight() {
+        let parent = Section {
+            slug: "docs".into(),
+            title: "Docs".into(),
+            url: "/blog/docs/".into(),
+            collection: "posts".into(),
+            parent_slug: None,
+            children_slugs: vec!["blog:docs/b".into(), "blog:docs/a".into()],
+            weight: 0,
+            breadcrumb: vec![BreadcrumbItem {
+                title: "Docs".into(),
+                url: "/blog/docs/".into(),
+            }],
+        };
+        let child_a = Section {
+            slug: "a".into(),
+            title: "Alpha".into(),
+            url: "/blog/docs/a/".into(),
+            collection: "posts".into(),
+            parent_slug: Some("blog:docs".into()),
+            children_slugs: vec![],
+            weight: 20,
+            breadcrumb: vec![],
+        };
+        let child_b = Section {
+            slug: "b".into(),
+            title: "Beta".into(),
+            url: "/blog/docs/b/".into(),
+            collection: "posts".into(),
+            parent_slug: Some("blog:docs".into()),
+            children_slugs: vec![],
+            weight: 10,
+            breadcrumb: vec![],
+        };
+        let mut sections = HashMap::new();
+        sections.insert("blog:docs".into(), parent.clone());
+        sections.insert("blog:docs/a".into(), child_a);
+        sections.insert("blog:docs/b".into(), child_b);
+
+        let ctx = section_context(Some(&parent), &[], &sections);
+        let children = ctx["children"].as_array().unwrap();
+        assert_eq!(children[0]["title"], "Beta");
+        assert_eq!(children[1]["title"], "Alpha");
+    }
+
+    #[test]
+    fn prune_removed_outputs_deletes_stale_sitemap_shards() {
+        let root = temp_dir("kiln-sitemap-prune");
+        let output_dir = root.join("dist");
+        std::fs::create_dir_all(&output_dir).unwrap();
+        std::fs::write(output_dir.join("sitemap.xml"), "index").unwrap();
+        std::fs::write(output_dir.join("sitemap-1.xml"), "chunk1").unwrap();
+        std::fs::write(output_dir.join("sitemap-2.xml"), "chunk2").unwrap();
+
+        let previous: std::collections::HashSet<PathBuf> = [
+            output_dir.join("sitemap.xml"),
+            output_dir.join("sitemap-1.xml"),
+            output_dir.join("sitemap-2.xml"),
+        ]
+        .into_iter()
+        .collect();
+        let current: std::collections::HashSet<PathBuf> =
+            [output_dir.join("sitemap.xml")].into_iter().collect();
+
+        prune_removed_outputs(&output_dir, &previous, &current).unwrap();
+
+        assert!(output_dir.join("sitemap.xml").exists());
+        assert!(!output_dir.join("sitemap-1.xml").exists());
+        assert!(!output_dir.join("sitemap-2.xml").exists());
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     fn temp_dir(prefix: &str) -> PathBuf {

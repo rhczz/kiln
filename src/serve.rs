@@ -31,6 +31,7 @@ pub fn start(
         crate::site::BuildMode::Full,
         Some(&mut cache),
         &artifacts,
+        true,
     )?;
 
     // Start file watcher in background
@@ -102,6 +103,7 @@ pub fn start(
                                     crate::site::BuildMode::Content,
                                     Some(&mut cache),
                                     &artifacts,
+                                    true,
                                 ),
                                 RebuildMode::Public => crate::site::build_public_incremental(
                                     &config, output_dir, false, &mut cache, &artifacts,
@@ -117,6 +119,7 @@ pub fn start(
                                         crate::site::BuildMode::Full,
                                         Some(&mut cache),
                                         &artifacts,
+                                        true,
                                     )
                                 }
                             }

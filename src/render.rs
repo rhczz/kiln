@@ -10,7 +10,19 @@ use comrak::{
     ComrakRenderPlugins,
 };
 
-pub fn markdown_to_html(md: &str) -> String {
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Heading {
+    pub level: u8,
+    pub id: String,
+    pub text: String,
+}
+
+pub struct RenderOutput {
+    pub html: String,
+    pub headings: Vec<Heading>,
+}
+
+pub fn markdown_to_html(md: &str) -> RenderOutput {
     let options = markdown_options();
     let arena = Arena::new();
     let root = parse_document(&arena, md, &options);
@@ -26,7 +38,16 @@ pub fn markdown_to_html(md: &str) -> String {
     let mut html = Vec::new();
     format_html_with_plugins(root, &options, &mut html, &plugins)
         .expect("rendering markdown HTML should not fail");
-    String::from_utf8(html).expect("comrak should render valid UTF-8")
+
+    let headings = heading_adapter
+        .headings
+        .into_inner()
+        .expect("heading lock poisoned");
+
+    RenderOutput {
+        html: String::from_utf8(html).expect("comrak should render valid UTF-8"),
+        headings,
+    }
 }
 
 fn markdown_options() -> ComrakOptions {
@@ -118,6 +139,7 @@ fn ast_node<'a>(arena: &'a Arena<AstNode<'a>>, value: NodeValue) -> &'a AstNode<
 #[derive(Default)]
 struct AnchorHeadingAdapter {
     used: std::sync::Mutex<HashMap<String, usize>>,
+    headings: std::sync::Mutex<Vec<Heading>>,
 }
 
 impl HeadingAdapter for AnchorHeadingAdapter {
@@ -128,6 +150,14 @@ impl HeadingAdapter for AnchorHeadingAdapter {
         _sourcepos: Option<Sourcepos>,
     ) -> io::Result<()> {
         let id = self.unique_slug(&heading.content);
+        self.headings
+            .lock()
+            .expect("heading lock poisoned")
+            .push(Heading {
+                level: heading.level,
+                id: id.clone(),
+                text: heading.content.clone(),
+            });
         write!(output, r#"<h{} id="{}" tabindex="-1">"#, heading.level, id)
     }
 
@@ -192,29 +222,51 @@ mod tests {
 
     #[test]
     fn renders_heading_anchor_from_ast() {
-        let html = markdown_to_html("## Service 层从哪来");
-        assert!(html.contains(
+        let output = markdown_to_html("## Service 层从哪来");
+        assert!(output.html.contains(
             r##"<h2 id="service-层从哪来" tabindex="-1">Service 层从哪来 <a class="heading-anchor" href="#service-层从哪来" aria-hidden="true">#</a></h2>"##
         ));
-        assert!(!html.contains(r#"class="anchor""#));
+        assert!(!output.html.contains(r#"class="anchor""#));
     }
 
     #[test]
     fn wraps_tables_without_touching_code_blocks() {
-        let html =
+        let output =
             markdown_to_html("| A | B |\n|---|---|\n| 1 | 2 |\n\n```html\n<table></table>\n```");
-        assert!(html.contains(r#"<div class="table-scroll">"#));
-        assert!(html.contains("<table>"));
-        assert!(html.contains("&lt;table&gt;&lt;/table&gt;"));
+        assert!(output.html.contains(r#"<div class="table-scroll">"#));
+        assert!(output.html.contains("<table>"));
+        assert!(output.html.contains("&lt;table&gt;&lt;/table&gt;"));
     }
 
     #[test]
     fn renders_task_checkbox_class() {
-        let html = markdown_to_html("- [x] done\n- [ ] todo");
-        assert!(html.contains(
+        let output = markdown_to_html("- [x] done\n- [ ] todo");
+        assert!(output.html.contains(
             r#"<input class="task-list-item-checkbox" type="checkbox" disabled checked> done"#
         ));
-        assert!(html
+        assert!(output
+            .html
             .contains(r#"<input class="task-list-item-checkbox" type="checkbox" disabled> todo"#));
+    }
+
+    #[test]
+    fn collects_headings_with_level_id_and_text() {
+        let output = markdown_to_html("# Title\n## Section\n### Sub\n\nSome text\n\n## Another");
+        assert_eq!(output.headings.len(), 4);
+        assert_eq!(output.headings[0].level, 1);
+        assert_eq!(output.headings[0].id, "title");
+        assert_eq!(output.headings[0].text, "Title");
+        assert_eq!(output.headings[1].level, 2);
+        assert_eq!(output.headings[1].id, "section");
+        assert_eq!(output.headings[3].text, "Another");
+    }
+
+    #[test]
+    fn deduplicates_heading_ids_in_toc() {
+        let output = markdown_to_html("## Foo\n## Foo\n## Foo");
+        assert_eq!(output.headings.len(), 3);
+        assert_eq!(output.headings[0].id, "foo");
+        assert_eq!(output.headings[1].id, "foo-2");
+        assert_eq!(output.headings[2].id, "foo-3");
     }
 }
