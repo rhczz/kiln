@@ -1,3 +1,4 @@
+use anyhow::Context;
 use serde::Deserialize;
 use std::cmp::Reverse;
 use std::collections::HashMap;
@@ -144,7 +145,8 @@ pub(crate) fn parse_content_item(
     let slug = if fm.slug.is_empty() {
         derive_slug(path, collection_dir)
     } else {
-        fm.slug
+        validate_slug(&fm.slug)
+            .with_context(|| format!("invalid slug '{}' in {:?}", fm.slug, path))?
     };
 
     let url = collection.route.replace("{slug}", &slug);
@@ -258,6 +260,21 @@ fn derive_slug(path: &std::path::Path, collection_dir: &std::path::Path) -> Stri
         Some(dir) => format!("{}/{}", dir, stripped),
         None => stripped,
     }
+}
+
+/// Reject slugs that could escape the output directory via path traversal.
+fn validate_slug(s: &str) -> anyhow::Result<String> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("slug cannot be empty");
+    }
+    if trimmed.contains("..") {
+        anyhow::bail!("slug cannot contain '..'");
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') {
+        anyhow::bail!("slug cannot contain path separators");
+    }
+    Ok(trimmed.to_string())
 }
 
 fn extract_taxonomy_terms(fm: &ItemFrontmatter) -> HashMap<String, Vec<String>> {
@@ -394,5 +411,23 @@ Draft body."#,
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("{}-{}-{}", prefix, std::process::id(), now))
+    }
+
+    #[test]
+    fn rejects_slug_with_dot_dot() {
+        assert!(super::validate_slug("../../../etc/passwd").is_err());
+        assert!(super::validate_slug("foo..bar").is_err());
+    }
+
+    #[test]
+    fn rejects_slug_with_path_separators() {
+        assert!(super::validate_slug("foo/bar").is_err());
+        assert!(super::validate_slug("foo\\bar").is_err());
+    }
+
+    #[test]
+    fn accepts_valid_slug() {
+        assert_eq!(super::validate_slug("hello-world").unwrap(), "hello-world");
+        assert_eq!(super::validate_slug("my-post-123").unwrap(), "my-post-123");
     }
 }

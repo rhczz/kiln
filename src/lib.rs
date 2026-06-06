@@ -1,3 +1,4 @@
+mod asset;
 mod cache;
 mod cli;
 mod config;
@@ -19,6 +20,7 @@ pub fn run() -> anyhow::Result<()> {
     cli::run()
 }
 
+pub use asset::AssetManifest;
 pub use cache::BuildCache;
 pub use config::{
     AuthorConfig, CollectionConfig, FeedConfig, MenuItemConfig, PathsConfig, SiteConfig, SiteMeta,

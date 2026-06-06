@@ -1,4 +1,5 @@
 use anyhow::Context;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 
 use crate::model::PageKind;
@@ -14,21 +15,29 @@ const DEFAULT_404: &str = include_str!("defaults/404.html");
 
 pub struct Engine {
     tera: tera::Tera,
+    template_sources: HashMap<String, String>,
 }
 
 impl Engine {
     pub fn init(templates_dir: &Path) -> anyhow::Result<Self> {
         let mut tera = tera::Tera::default();
+        let mut template_sources = HashMap::new();
 
         // Load embedded defaults first
-        tera.add_raw_template("layout.html", DEFAULT_LAYOUT)?;
-        tera.add_raw_template("home.html", DEFAULT_HOME)?;
-        tera.add_raw_template("post.html", DEFAULT_POST)?;
-        tera.add_raw_template("page.html", DEFAULT_PAGE)?;
-        tera.add_raw_template("section.html", DEFAULT_SECTION)?;
-        tera.add_raw_template("taxonomy.html", DEFAULT_TAXONOMY)?;
-        tera.add_raw_template("term.html", DEFAULT_TERM)?;
-        tera.add_raw_template("404.html", DEFAULT_404)?;
+        let defaults: [(&str, &str); 8] = [
+            ("layout.html", DEFAULT_LAYOUT),
+            ("home.html", DEFAULT_HOME),
+            ("post.html", DEFAULT_POST),
+            ("page.html", DEFAULT_PAGE),
+            ("section.html", DEFAULT_SECTION),
+            ("taxonomy.html", DEFAULT_TAXONOMY),
+            ("term.html", DEFAULT_TERM),
+            ("404.html", DEFAULT_404),
+        ];
+        for (name, source) in defaults {
+            tera.add_raw_template(name, source)?;
+            template_sources.insert(name.to_string(), source.to_string());
+        }
 
         // If external templates directory exists, load and override
         if templates_dir.is_dir() {
@@ -42,12 +51,19 @@ impl Engine {
                     .to_string_lossy()
                     .replace('\\', "/")
                     .to_string();
+                let source = std::fs::read_to_string(&path)
+                    .with_context(|| format!("Failed to read template {:?}", path))?;
+                // Use add_template_file for correct relative path resolution in Tera
                 tera.add_template_file(&path, Some(&name))
                     .with_context(|| format!("Failed to load template {:?}", path))?;
+                template_sources.insert(name, source);
             }
         }
 
-        Ok(Self { tera })
+        Ok(Self {
+            tera,
+            template_sources,
+        })
     }
 
     pub fn render(&self, template: &str, context: &tera::Context) -> anyhow::Result<String> {
@@ -112,6 +128,116 @@ impl Engine {
             .find(|name| self.template_exists(name))
             .unwrap_or_else(|| "list.html".into())
     }
+
+    /// Returns the source of a registered template, if available.
+    pub fn template_source(&self, name: &str) -> Option<&str> {
+        self.template_sources.get(name).map(|s| s.as_str())
+    }
+
+    /// Returns all registered template names.
+    pub fn template_names(&self) -> Vec<&str> {
+        self.template_sources.keys().map(|s| s.as_str()).collect()
+    }
+
+    /// Returns shared access to template sources, used for parallel rendering
+    /// where each thread builds its own Tera instance.
+    pub fn shared_template_sources(&self) -> std::sync::Arc<std::collections::HashMap<String, String>> {
+        std::sync::Arc::new(self.template_sources.clone())
+    }
+
+    /// Creates an Engine from a pre-built Tera instance (no template loading).
+    /// Used in parallel rendering tasks that build their own Tera from shared sources.
+    pub fn init_tera_only(tera: tera::Tera) -> Self {
+        Self {
+            tera,
+            template_sources: HashMap::new(),
+        }
+    }
+
+    /// Returns the full transitive dependency chain for a template
+    /// (direct extends/include + recursive). Uses BFS with dedup.
+    pub fn template_deps(&self, template_name: &str) -> Vec<String> {
+        let mut visited = HashSet::new();
+        let mut queue = VecDeque::new();
+        let mut result = Vec::new();
+
+        queue.push_back(template_name.to_string());
+
+        while let Some(current) = queue.pop_front() {
+            if !visited.insert(current.clone()) {
+                continue;
+            }
+            result.push(current.clone());
+
+            if let Some(source) = self.template_sources.get(&current) {
+                for dep in extract_template_deps(source) {
+                    if !visited.contains(&dep) {
+                        queue.push_back(dep);
+                    }
+                }
+            }
+        }
+
+        result
+    }
+}
+
+/// Extract template names from `{% extends "..." %}`, `{% include "..." %}`,
+/// and `{% import "..." %}` directives using simple string scanning.
+fn extract_template_deps(source: &str) -> Vec<String> {
+    let mut deps = Vec::new();
+    let mut pos = 0;
+
+    while let Some(tag_start) = source[pos..].find("{%") {
+        let abs = pos + tag_start;
+        let tag_content = &source[abs..];
+
+        let tag_end = match tag_content.find("%}") {
+            Some(end) => end,
+            None => break,
+        };
+
+        // Strip whitespace control characters from tag body: {%- ... -%}
+        let inner = tag_content[2..tag_end]
+            .trim_matches(|c: char| c.is_whitespace() || c == '-');
+
+        // Check for extends, include, or import
+        let directive = if inner.starts_with("extends") {
+            "extends"
+        } else if inner.starts_with("include") {
+            "include"
+        } else if inner.starts_with("import") {
+            "import"
+        } else {
+            pos = abs + tag_end + 2;
+            continue;
+        };
+
+        // Find the quoted string after the directive
+        let after_directive = &inner[directive.len()..].trim_start();
+        let quote = match after_directive.chars().next() {
+            Some(c @ ('"' | '\'')) => c,
+            _ => {
+                pos = abs + tag_end + 2;
+                continue;
+            }
+        };
+
+        // Extract the path between matching quotes
+        if let Some(inner_end) = after_directive[1..].find(quote) {
+            let dep_name = &after_directive[1..=inner_end];
+            let dep = if dep_name.ends_with(".html") {
+                dep_name.to_string()
+            } else {
+                format!("{}.html", dep_name)
+            };
+            deps.push(dep);
+        }
+
+        pos = abs + tag_end + 2;
+    }
+
+    deps
 }
 
 #[cfg(test)]
@@ -208,5 +334,127 @@ mod tests {
         assert!(engine.template_exists("home.html"));
         assert!(engine.template_exists("section.html"));
         assert!(!engine.template_exists("nonexistent.html"));
+    }
+
+    // ── template dependency extraction ──
+
+    #[test]
+    fn extract_extends_directive() {
+        let source = r#"{% extends "layout.html" %}<html></html>"#;
+        let deps = super::extract_template_deps(source);
+        assert_eq!(deps, vec!["layout.html"]);
+    }
+
+    #[test]
+    fn extract_include_directive() {
+        let source = r#"{% include "partials/header.html" %}<body></body>"#;
+        let deps = super::extract_template_deps(source);
+        assert_eq!(deps, vec!["partials/header.html"]);
+    }
+
+    #[test]
+    fn extract_appends_html_suffix() {
+        let source = r#"{% extends "base" %}"#;
+        let deps = super::extract_template_deps(source);
+        assert_eq!(deps, vec!["base.html"]);
+    }
+
+    #[test]
+    fn extract_handles_whitespace_control() {
+        let source = r#"{%- extends "layout.html" -%}"#;
+        let deps = super::extract_template_deps(source);
+        assert_eq!(deps, vec!["layout.html"]);
+    }
+
+    #[test]
+    fn extract_single_quotes() {
+        let source = "{% include 'partial.html' %}";
+        let deps = super::extract_template_deps(source);
+        assert_eq!(deps, vec!["partial.html"]);
+    }
+
+    #[test]
+    fn extract_multiple_deps() {
+        let source = r#"
+            {% extends "layout.html" %}
+            {% include "header.html" %}
+            {% include "footer.html" %}
+        "#;
+        let deps = super::extract_template_deps(source);
+        assert_eq!(deps, vec!["layout.html", "header.html", "footer.html"]);
+    }
+
+    #[test]
+    fn extract_import_directive() {
+        let source = r#"{% import "macros.html" as macros %}"#;
+        let deps = super::extract_template_deps(source);
+        assert_eq!(deps, vec!["macros.html"]);
+    }
+
+    #[test]
+    fn extract_ignores_other_tags() {
+        let source = r#"{% if true %}{% endif %}text{% include "partial.html" %}"#;
+        let deps = super::extract_template_deps(source);
+        assert_eq!(deps, vec!["partial.html"]);
+    }
+
+    #[test]
+    fn template_source_returns_saved_source() {
+        let engine = Engine::init(std::path::Path::new("/missing/templates")).unwrap();
+        let source = engine.template_source("home.html");
+        assert!(source.is_some());
+        assert!(source.unwrap().contains("{{ body }}") || source.unwrap().contains("archive"));
+    }
+
+    #[test]
+    fn template_names_returns_all_registered() {
+        let engine = Engine::init(std::path::Path::new("/missing/templates")).unwrap();
+        let names = engine.template_names();
+        assert!(names.contains(&"home.html"));
+        assert!(names.contains(&"layout.html"));
+        assert!(names.contains(&"post.html"));
+        assert!(names.contains(&"404.html"));
+        // At least 8 embedded defaults
+        assert!(names.len() >= 8);
+    }
+
+    #[test]
+    fn template_deps_follows_chain() {
+        let dir = std::env::temp_dir().join("kiln_test_template_deps");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("partials")).unwrap();
+        std::fs::create_dir_all(dir.join("posts")).unwrap();
+        // layout.html includes header and footer
+        std::fs::write(
+            dir.join("layout.html"),
+            r#"{% include "partials/header.html" %}{{ body }}{% include "partials/footer.html" %}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.join("partials/header.html"), "header").unwrap();
+        std::fs::write(dir.join("partials/footer.html"), "footer").unwrap();
+        // post.html extends layout.html
+        std::fs::write(
+            dir.join("posts/post.html"),
+            r#"{% extends "layout.html" %}"#,
+        )
+        .unwrap();
+
+        let engine = Engine::init(&dir).unwrap();
+        let deps = engine.template_deps("posts/post.html");
+        // should include: posts/post.html → layout.html → partials/header.html, partials/footer.html
+        assert!(deps.contains(&"posts/post.html".to_string()));
+        assert!(deps.contains(&"layout.html".to_string()));
+        assert!(deps.contains(&"partials/header.html".to_string()));
+        assert!(deps.contains(&"partials/footer.html".to_string()));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn template_deps_no_extends_is_just_self() {
+        let engine = Engine::init(std::path::Path::new("/missing/templates")).unwrap();
+        // Default templates don't use extends/include
+        let deps = engine.template_deps("home.html");
+        assert_eq!(deps, vec!["home.html"]);
     }
 }

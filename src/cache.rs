@@ -9,6 +9,7 @@ use crate::content::{self, ContentItem};
 pub struct BuildCache {
     content_items: HashMap<PathBuf, CachedContent>,
     rendered_pages: HashMap<PathBuf, CachedRender>,
+    rendered_generic: HashMap<String, CachedRender>,
     copied_public: HashMap<PathBuf, String>,
     page_outputs: HashSet<PathBuf>,
     public_outputs: HashSet<PathBuf>,
@@ -33,9 +34,27 @@ impl BuildCache {
 
     pub fn clear_renders(&mut self) {
         self.rendered_pages.clear();
+        self.rendered_generic.clear();
         self.copied_public.clear();
         self.page_outputs.clear();
         self.public_outputs.clear();
+    }
+
+    /// Clear only render entries whose template_deps include the given template.
+    pub fn invalidate_by_template(
+        &mut self,
+        template: &str,
+        page_template_deps: &HashMap<PathBuf, Vec<String>>,
+    ) {
+        self.rendered_pages.retain(|source, _| {
+            !page_template_deps
+                .get(source)
+                .is_some_and(|deps| deps.iter().any(|d| d == template))
+        });
+        // For generic pages, we don't have per-entry template deps tracking yet,
+        // so invalidate all generic cached renders on template change.
+        // This is conservative but correct.
+        self.rendered_generic.clear();
     }
 
     pub fn reset_stats(&self) {
@@ -132,8 +151,41 @@ impl BuildCache {
         self.public_outputs.insert(output);
     }
 
+    /// Cached render lookup for non-Single pages, keyed by a logical key
+    /// (e.g. "/", "/tags/", "/tags/rust/").
+    pub fn cached_generic_render(&self, logical_key: &str, hash: &str) -> Option<&str> {
+        match self.rendered_generic.get(logical_key) {
+            Some(entry) if entry.hash == hash => {
+                self.cache_hits.set(self.cache_hits.get() + 1);
+                Some(entry.html.as_str())
+            }
+            Some(_) => {
+                self.cache_misses.set(self.cache_misses.get() + 1);
+                None
+            }
+            None => {
+                self.cache_misses.set(self.cache_misses.get() + 1);
+                None
+            }
+        }
+    }
+
+    pub fn store_generic_render(&mut self, logical_key: String, hash: String, html: String) {
+        self.rendered_generic
+            .insert(logical_key, CachedRender { hash, html });
+    }
+
     pub fn cache_stats(&self) -> (usize, usize) {
         (self.cache_hits.get(), self.cache_misses.get())
+    }
+
+    /// Build a 3-level cache key: content_hash:template_hash:config_hash
+    pub fn build_render_hash(
+        content_hash: &str,
+        template_hash: &str,
+        config_hash: &str,
+    ) -> String {
+        format!("{}:{}:{}", content_hash, template_hash, config_hash)
     }
 }
 
