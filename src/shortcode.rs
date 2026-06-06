@@ -60,7 +60,11 @@ pub fn preprocess(md: &str) -> (String, Vec<Shortcode>) {
 }
 
 /// Replace shortcode placeholders in HTML with rendered template output.
-pub fn postprocess(html: &str, shortcodes: &[Shortcode], engine: &Engine) -> anyhow::Result<String> {
+pub fn postprocess(
+    html: &str,
+    shortcodes: &[Shortcode],
+    engine: &Engine,
+) -> anyhow::Result<String> {
     let mut result = html.to_string();
 
     for (i, sc) in shortcodes.iter().enumerate() {

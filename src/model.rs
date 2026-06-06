@@ -728,6 +728,9 @@ mod tests {
             .map(|p| p.url.clone())
             .collect();
 
-        assert_eq!(taxonomy_urls, vec!["/categories/".to_string(), "/topics/".to_string()]);
+        assert_eq!(
+            taxonomy_urls,
+            vec!["/categories/".to_string(), "/topics/".to_string()]
+        );
     }
 }

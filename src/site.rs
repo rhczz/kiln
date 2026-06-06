@@ -278,12 +278,7 @@ fn render_single(
     let body = env.engine.render(template, &ctx)?;
     let body = if !item.shortcodes.is_empty() {
         crate::shortcode::postprocess(&body, &item.shortcodes, env.engine)
-            .with_context(|| {
-                format!(
-                    "Failed to process shortcodes for {:?}",
-                    item.source_path
-                )
-            })?
+            .with_context(|| format!("Failed to process shortcodes for {:?}", item.source_path))?
     } else {
         body
     };
