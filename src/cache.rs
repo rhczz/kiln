@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -11,6 +12,8 @@ pub struct BuildCache {
     copied_public: HashMap<PathBuf, String>,
     page_outputs: HashSet<PathBuf>,
     public_outputs: HashSet<PathBuf>,
+    cache_hits: Cell<usize>,
+    cache_misses: Cell<usize>,
 }
 
 struct CachedContent {
@@ -35,6 +38,11 @@ impl BuildCache {
         self.public_outputs.clear();
     }
 
+    pub fn reset_stats(&self) {
+        self.cache_hits.set(0);
+        self.cache_misses.set(0);
+    }
+
     pub fn parse_content_item(
         &mut self,
         path: &Path,
@@ -46,12 +54,14 @@ impl BuildCache {
         let hash = content::fingerprint(raw.as_bytes());
         if let Some(cached) = self.content_items.get(path) {
             if cached.hash == hash {
+                self.cache_hits.set(self.cache_hits.get() + 1);
                 if !include_drafts && cached.item.draft {
                     return Ok(None);
                 }
                 return Ok(Some(cached.item.clone()));
             }
         }
+        self.cache_misses.set(self.cache_misses.get() + 1);
 
         let parsed =
             content::parse_content_item(path, raw, collection, include_drafts, collection_dir)?;
@@ -69,14 +79,24 @@ impl BuildCache {
         Ok(parsed)
     }
 
+    /// Returns cached HTML if the render hash matches.
+    /// Counts stale entries (key exists, hash differs) as misses.
     pub fn cached_render(&self, source_path: &Path, hash: &str) -> Option<&str> {
-        self.rendered_pages.get(source_path).and_then(|entry| {
-            if entry.hash == hash {
+        match self.rendered_pages.get(source_path) {
+            Some(entry) if entry.hash == hash => {
+                self.cache_hits.set(self.cache_hits.get() + 1);
                 Some(entry.html.as_str())
-            } else {
+            }
+            Some(_) => {
+                // Entry exists but hash is stale, so count it as a miss.
+                self.cache_misses.set(self.cache_misses.get() + 1);
                 None
             }
-        })
+            None => {
+                self.cache_misses.set(self.cache_misses.get() + 1);
+                None
+            }
+        }
     }
 
     pub fn store_render(&mut self, source_path: &Path, hash: String, html: String) {
@@ -110,5 +130,73 @@ impl BuildCache {
 
     pub fn add_public_output(&mut self, output: PathBuf) {
         self.public_outputs.insert(output);
+    }
+
+    pub fn cache_stats(&self) -> (usize, usize) {
+        (self.cache_hits.get(), self.cache_misses.get())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cache_with_render(hash: &str, html: &str) -> BuildCache {
+        let mut cache = BuildCache::new();
+        cache.store_render(
+            Path::new("content/posts/demo.md"),
+            hash.to_string(),
+            html.to_string(),
+        );
+        cache
+    }
+
+    #[test]
+    fn cached_render_counts_miss_when_entry_is_missing() {
+        let cache = BuildCache::new();
+
+        assert!(cache
+            .cached_render(Path::new("content/posts/demo.md"), "abc")
+            .is_none());
+        assert_eq!(cache.cache_stats(), (0, 1));
+    }
+
+    #[test]
+    fn cached_render_counts_miss_when_entry_is_stale() {
+        let cache = cache_with_render("old", "<p>old</p>");
+
+        assert!(cache
+            .cached_render(Path::new("content/posts/demo.md"), "new")
+            .is_none());
+        assert_eq!(cache.cache_stats(), (0, 1));
+    }
+
+    #[test]
+    fn cached_render_counts_hit_when_entry_matches() {
+        let cache = cache_with_render("same", "<p>same</p>");
+
+        assert_eq!(
+            cache.cached_render(Path::new("content/posts/demo.md"), "same"),
+            Some("<p>same</p>")
+        );
+        assert_eq!(cache.cache_stats(), (1, 0));
+    }
+
+    #[test]
+    fn reset_stats_starts_a_new_reporting_window() {
+        let cache = cache_with_render("same", "<p>same</p>");
+
+        assert_eq!(
+            cache.cached_render(Path::new("content/posts/demo.md"), "same"),
+            Some("<p>same</p>")
+        );
+        assert_eq!(cache.cache_stats(), (1, 0));
+
+        cache.reset_stats();
+
+        assert!(cache
+            .cached_render(Path::new("content/posts/missing.md"), "missing")
+            .is_none());
+        assert_eq!(cache.cache_stats(), (0, 1));
     }
 }

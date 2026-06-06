@@ -1,0 +1,64 @@
+---
+source: tests/snapshot_tests.rs
+expression: html
+---
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Snapshot Site</title>
+  <meta name="description" content="A snapshot test site">
+  <link rel="canonical" href="https:&#x2F;&#x2F;snapshot.test/">
+  <link rel="alternate" type="application/rss+xml" title="Snapshot Site" href="/rss.xml">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Snapshot Site">
+  <meta property="og:description" content="A snapshot test site">
+  <meta name="twitter:card" content="summary">
+  <link rel="stylesheet" href="/assets/styles.3e67b4a9505b.css">
+</head>
+<body>
+  <header>
+    <a href="/">Snapshot Site</a>
+    <nav>
+      
+    </nav>
+  </header>
+  <main><h1>Snapshot Site</h1>
+<p>Snapshot subtitle</p>
+
+
+
+
+<section>
+  <h2>Posts</h2>
+  <ul>
+    
+    <li><a href="&#x2F;posts&#x2F;hello&#x2F;">Hello World</a> — 2026.06.01</li>
+    
+  </ul>
+</section>
+
+
+
+
+
+<section>
+  <h2>Archive</h2>
+  
+  <h3>2026</h3>
+  <ul>
+    
+    <li><a href="&#x2F;posts&#x2F;hello&#x2F;">Hello World</a></li>
+    
+  </ul>
+  
+</section>
+
+</main>
+  <footer>
+    <p>&copy; 2026 Snap Author</p>
+    
+  </footer>
+</body>
+</html>

@@ -27,11 +27,14 @@ pub fn start(
     crate::site::build_with_artifacts(
         &config,
         output_dir,
-        false,
-        crate::site::BuildMode::Full,
         Some(&mut cache),
         &artifacts,
-        true,
+        crate::site::BuildOptions {
+            include_drafts: false,
+            mode: crate::site::BuildMode::Full,
+            emit_report: true,
+            profile: false,
+        },
     )?;
 
     // Start file watcher in background
@@ -83,9 +86,10 @@ pub fn start(
                 let mode = classify_rebuild(&paths, config_path, &config);
                 pending_mode = Some(match (pending_mode.take(), mode) {
                     (Some(RebuildMode::Full), _) | (_, RebuildMode::Full) => RebuildMode::Full,
-                    (Some(RebuildMode::Public), _) | (_, RebuildMode::Public) => {
-                        RebuildMode::Public
-                    }
+                    (Some(RebuildMode::Public), RebuildMode::Content)
+                    | (Some(RebuildMode::Content), RebuildMode::Public)
+                    | (Some(RebuildMode::Public), RebuildMode::Public) => RebuildMode::Public,
+                    (Some(RebuildMode::Content), RebuildMode::Content) => RebuildMode::Content,
                     _ => RebuildMode::Content,
                 });
             }
@@ -99,11 +103,14 @@ pub fn start(
                                 RebuildMode::Content => crate::site::build_with_artifacts(
                                     &config,
                                     output_dir,
-                                    false,
-                                    crate::site::BuildMode::Content,
                                     Some(&mut cache),
                                     &artifacts,
-                                    true,
+                                    crate::site::BuildOptions {
+                                        include_drafts: false,
+                                        mode: crate::site::BuildMode::Content,
+                                        emit_report: true,
+                                        profile: false,
+                                    },
                                 ),
                                 RebuildMode::Public => crate::site::build_public_incremental(
                                     &config, output_dir, false, &mut cache, &artifacts,
@@ -115,11 +122,14 @@ pub fn start(
                                     crate::site::build_with_artifacts(
                                         &config,
                                         output_dir,
-                                        false,
-                                        crate::site::BuildMode::Full,
                                         Some(&mut cache),
                                         &artifacts,
-                                        true,
+                                        crate::site::BuildOptions {
+                                            include_drafts: false,
+                                            mode: crate::site::BuildMode::Full,
+                                            emit_report: true,
+                                            profile: false,
+                                        },
                                     )
                                 }
                             }
@@ -165,19 +175,28 @@ fn classify_rebuild(
     let content_root = Path::new(&config.paths.content);
     let styles_path = Path::new(&config.paths.styles);
 
-    let mut mode = RebuildMode::Content;
+    let mut saw_content = false;
+    let mut saw_public = false;
     for path in paths {
         if path == config_path || path.starts_with(template_root) || path.starts_with(styles_path) {
             return RebuildMode::Full;
         }
         if path.starts_with(public_root) {
-            mode = RebuildMode::Public;
+            saw_public = true;
+        } else if path.starts_with(content_root) {
+            saw_content = true;
         } else if !path.starts_with(content_root) {
-            mode = RebuildMode::Full;
+            return RebuildMode::Full;
         }
     }
 
-    mode
+    if saw_public && saw_content {
+        RebuildMode::Full
+    } else if saw_public {
+        RebuildMode::Public
+    } else {
+        RebuildMode::Content
+    }
 }
 
 fn serve_file(
@@ -281,7 +300,10 @@ fn mime_type(path: &std::path::Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_file;
+    use super::{classify_rebuild, resolve_file, RebuildMode};
+    use crate::config::{PathsConfig, SiteConfig, SiteMeta};
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -310,11 +332,62 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn classify_rebuild_escalates_mixed_public_and_content_changes_to_full() {
+        let config = test_config();
+        let paths = vec![
+            PathBuf::from("/site/content/posts/hello.md"),
+            PathBuf::from("/site/public/logo.svg"),
+        ];
+
+        assert!(matches!(
+            classify_rebuild(&paths, Path::new("/site/site.config.toml"), &config),
+            RebuildMode::Full
+        ));
+    }
+
+    #[test]
+    fn classify_rebuild_keeps_public_only_changes_as_public() {
+        let config = test_config();
+        let paths = vec![PathBuf::from("/site/public/logo.svg")];
+
+        assert!(matches!(
+            classify_rebuild(&paths, Path::new("/site/site.config.toml"), &config),
+            RebuildMode::Public
+        ));
+    }
+
     fn temp_dir(prefix: &str) -> std::path::PathBuf {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("{}-{}-{}", prefix, std::process::id(), now))
+    }
+
+    fn test_config() -> SiteConfig {
+        SiteConfig {
+            paths: PathsConfig {
+                content: "/site/content".into(),
+                templates: "/site/templates".into(),
+                public: "/site/public".into(),
+                styles: "/site/styles.css".into(),
+            },
+            site: SiteMeta {
+                title: "Test".into(),
+                subtitle: String::new(),
+                description: String::new(),
+                language: "en".into(),
+                base_url: "https://example.com".into(),
+            },
+            author: None,
+            feed: Default::default(),
+            collections: vec![],
+            taxonomies: vec![],
+            paginate_by: 0,
+            paginate_path: "page".into(),
+            menus: HashMap::new(),
+            extra: toml::Value::Table(Default::default()),
+        }
     }
 }

@@ -1,0 +1,79 @@
+---
+source: tests/snapshot_tests.rs
+expression: sorted
+---
+{
+  "config_hash": "c53ba8ef0158",
+  "entries": [
+    {
+      "content_hash": "404.html",
+      "outputs": [
+        "404.html"
+      ],
+      "source": "404.html"
+    },
+    {
+      "content_hash": "420212121686",
+      "outputs": [
+        "posts/hello/index.html"
+      ],
+      "source": "<ROOT>/content/posts/2026-06-01-hello.md"
+    },
+    {
+      "content_hash": "assets/styles.3e67b4a9505b.css",
+      "outputs": [
+        "assets/styles.3e67b4a9505b.css"
+      ],
+      "source": "assets/styles.css"
+    },
+    {
+      "content_hash": "generated",
+      "outputs": [
+        "robots.txt"
+      ],
+      "source": "generated/robots.txt"
+    },
+    {
+      "content_hash": "generated",
+      "outputs": [
+        "rss.xml"
+      ],
+      "source": "generated/rss.xml"
+    },
+    {
+      "content_hash": "generated",
+      "outputs": [
+        "sitemap.xml"
+      ],
+      "source": "generated/sitemap.xml"
+    },
+    {
+      "content_hash": "index.html",
+      "outputs": [
+        "index.html"
+      ],
+      "source": "index.html"
+    },
+    {
+      "content_hash": "tags/index.html",
+      "outputs": [
+        "tags/index.html"
+      ],
+      "source": "tags/index.html"
+    },
+    {
+      "content_hash": "tags/snapshot/index.html",
+      "outputs": [
+        "tags/snapshot/index.html"
+      ],
+      "source": "tags/snapshot/index.html"
+    },
+    {
+      "content_hash": "tags/test/index.html",
+      "outputs": [
+        "tags/test/index.html"
+      ],
+      "source": "tags/test/index.html"
+    }
+  ]
+}

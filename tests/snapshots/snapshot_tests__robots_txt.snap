@@ -1,0 +1,7 @@
+---
+source: tests/snapshot_tests.rs
+expression: txt
+---
+User-agent: *
+Allow: /
+Sitemap: https://snapshot.test/sitemap.xml

@@ -1,0 +1,63 @@
+---
+source: tests/snapshot_tests.rs
+expression: html
+---
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hello World · Snapshot Site</title>
+  <meta name="description" content="First snapshot test">
+  <link rel="canonical" href="https:&#x2F;&#x2F;snapshot.test/posts&#x2F;hello/">
+  <link rel="alternate" type="application/rss+xml" title="Snapshot Site" href="/rss.xml">
+  <meta property="og:type" content="article">
+  <meta property="og:title" content="Hello World · Snapshot Site">
+  <meta property="og:description" content="First snapshot test">
+  <meta name="twitter:card" content="summary">
+  <link rel="stylesheet" href="/assets/styles.3e67b4a9505b.css">
+</head>
+<body>
+  <header>
+    <a href="/">Snapshot Site</a>
+    <nav>
+      
+    </nav>
+  </header>
+  <main><article>
+  <header>
+    <a href="/">← Home</a>
+    <h1>Hello World</h1>
+    <time datetime="2026-06-01">June 1, 2026</time>
+    <p>First snapshot test</p>
+    
+    <p><span>test</span><span>snapshot</span></p>
+    
+  </header>
+  <div><h2 id="intro" tabindex="-1">Intro <a class="heading-anchor" href="#intro" aria-hidden="true">#</a></h2>
+<p>Paragraph with <strong>bold</strong>.</p>
+<div class="table-scroll">
+<table>
+<thead>
+<tr>
+<th>A</th>
+<th>B</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>2</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</article>
+</main>
+  <footer>
+    <p>&copy; 2026 Snap Author</p>
+    
+  </footer>
+</body>
+</html>

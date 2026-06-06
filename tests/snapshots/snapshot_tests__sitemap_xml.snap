@@ -1,0 +1,23 @@
+---
+source: tests/snapshot_tests.rs
+expression: xml
+---
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://snapshot.test/</loc>
+  </url>
+  <url>
+    <loc>https://snapshot.test/posts/hello/</loc>
+  </url>
+  <url>
+    <loc>https://snapshot.test/tags/</loc>
+  </url>
+  <url>
+    <loc>https://snapshot.test/tags/snapshot/</loc>
+  </url>
+  <url>
+    <loc>https://snapshot.test/tags/test/</loc>
+  </url>
+
+</urlset>

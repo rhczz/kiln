@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use kiln::{
-    build, build_with_artifacts, AuthorConfig, BuildArtifacts, BuildCache, BuildMode,
+    build, build_with_artifacts, AuthorConfig, BuildArtifacts, BuildCache, BuildMode, BuildOptions,
     CollectionConfig, FeedConfig, PageKind, PathsConfig, SiteConfig, SiteMeta, TaxonomyConfig,
 };
 
@@ -115,7 +115,7 @@ fn minimal_site_builds_homepage_and_feeds() {
     let config = f.config();
     let output = f.root().join("dist");
 
-    build(&config, &output, false).unwrap();
+    build(&config, &output, false, false).unwrap();
 
     assert!(file_exists(&output.join("index.html")));
     assert!(file_exists(&output.join("rss.xml")));
@@ -145,7 +145,7 @@ tags: ["hello", "test"]
     let config = f.config();
     let output = f.root().join("dist");
 
-    build(&config, &output, false).unwrap();
+    build(&config, &output, false, false).unwrap();
 
     let post = read(&output.join("posts/hello/index.html"));
     assert!(post.contains("Hello World"));
@@ -191,7 +191,7 @@ featured: {}
     let config = f.config();
     let output = f.root().join("dist");
 
-    build(&config, &output, false).unwrap();
+    build(&config, &output, false, false).unwrap();
 
     for i in 1..=5 {
         let post = read(&output.join(&format!("posts/post-{}/index.html", i)));
@@ -222,7 +222,7 @@ date: "2026-06-{}"
     config.paginate_by = 1;
     let output = f.root().join("dist");
 
-    build(&config, &output, false).unwrap();
+    build(&config, &output, false, false).unwrap();
 
     let index = read(&output.join("index.html"));
     assert!(index.contains("Post 3"));
@@ -252,7 +252,7 @@ fn pages_without_dates_render_correctly() {
     let config = f.config();
     let output = f.root().join("dist");
 
-    build(&config, &output, false).unwrap();
+    build(&config, &output, false, false).unwrap();
 
     let about = read(&output.join("about/index.html"));
     assert!(about.contains("About"));
@@ -285,7 +285,7 @@ categories: ["Rust"]
     }];
     let output = f.root().join("dist");
 
-    build(&config, &output, false).unwrap();
+    build(&config, &output, false, false).unwrap();
 
     assert!(output.join("categories/index.html").is_file());
     let term = read(&output.join("categories/rust/index.html"));
@@ -330,7 +330,7 @@ Guide content.
     }];
     let output = f.root().join("dist");
 
-    build(&config, &output, false).unwrap();
+    build(&config, &output, false, false).unwrap();
 
     let section = read(&output.join("blog/docs/index.html"));
     assert!(section.contains("CUSTOM SECTION Docs"));
@@ -394,7 +394,7 @@ Docs2 content.
     }];
     let output = f.root().join("dist");
 
-    build(&config, &output, false).unwrap();
+    build(&config, &output, false, false).unwrap();
 
     let docs_page = read(&output.join("blog/docs/index.html"));
     assert!(docs_page.contains("Docs Item"));
@@ -447,7 +447,7 @@ K8s content.
     }];
     let output = f.root().join("dist");
 
-    build(&config, &output, false).unwrap();
+    build(&config, &output, false, false).unwrap();
 
     assert!(output.join("blog/docs/index.html").is_file());
     assert!(output.join("blog/docs/k8s/index.html").is_file());
@@ -467,7 +467,7 @@ fn public_assets_are_copied_to_output() {
     let config = f.config();
     let output = f.root().join("dist");
 
-    build(&config, &output, false).unwrap();
+    build(&config, &output, false, false).unwrap();
 
     assert_eq!(
         fs::read(output.join("images/logo.png")).unwrap(),
@@ -475,6 +475,61 @@ fn public_assets_are_copied_to_output() {
     );
     assert_eq!(fs::read(output.join("favicon.ico")).unwrap(), b"ICO_DATA");
     assert_eq!(fs::read(output.join("sub/deep.txt")).unwrap(), b"DEEP");
+}
+
+#[test]
+fn missing_public_directory_removes_recorded_public_outputs() {
+    let f = FixtureBuilder::new("missing-public");
+    f.write_styles("body {}");
+    f.write_public("images/logo.png", b"PNG_DATA");
+    f.write_post(
+        "2026-06-01-hello.md",
+        r#"title: "Hello"
+date: "2026-06-01"
+"#,
+        "Hello body.",
+    );
+
+    let config = f.config();
+    let output = f.root().join("dist");
+    let mut cache = BuildCache::new();
+    let artifacts = BuildArtifacts::load(&config).unwrap();
+
+    build_with_artifacts(
+        &config,
+        &output,
+        Some(&mut cache),
+        &artifacts,
+        BuildOptions {
+            include_drafts: false,
+            mode: BuildMode::Full,
+            emit_report: true,
+            profile: false,
+        },
+    )
+    .unwrap();
+    assert!(output.join("images/logo.png").is_file());
+
+    fs::remove_dir_all(f.root().join("public")).unwrap();
+
+    build_with_artifacts(
+        &config,
+        &output,
+        Some(&mut cache),
+        &artifacts,
+        BuildOptions {
+            include_drafts: false,
+            mode: BuildMode::Public,
+            emit_report: true,
+            profile: false,
+        },
+    )
+    .unwrap();
+
+    assert!(
+        !output.join("images/logo.png").exists(),
+        "recorded public outputs should be removed when public/ disappears"
+    );
 }
 
 // --- Draft handling ---
@@ -502,7 +557,7 @@ draft: true
     let config = f.config();
     let output = f.root().join("dist");
 
-    build(&config, &output, false).unwrap();
+    build(&config, &output, false, false).unwrap();
 
     assert!(file_exists(&output.join("posts/published/index.html")));
     assert!(!file_exists(&output.join("posts/draft/index.html")));
@@ -528,7 +583,7 @@ draft: true
     let config = f.config();
     let output = f.root().join("dist");
 
-    build(&config, &output, true).unwrap();
+    build(&config, &output, true, false).unwrap();
 
     assert!(file_exists(&output.join("posts/draft/index.html")));
 }
@@ -559,7 +614,7 @@ description: "Post {}"
     config.feed.item_count = 3;
     let output = f.root().join("dist");
 
-    build(&config, &output, false).unwrap();
+    build(&config, &output, false, false).unwrap();
 
     let rss = read(&output.join("rss.xml"));
     assert!(rss.contains("Post 10"));
@@ -586,7 +641,7 @@ date: "2026-06-01"
     let config = f.config();
     let output = f.root().join("dist");
 
-    build(&config, &output, false).unwrap();
+    build(&config, &output, false, false).unwrap();
 
     let sitemap = read(&output.join("sitemap.xml"));
     assert!(sitemap.contains("https://fixture.test/"));
@@ -604,7 +659,7 @@ fn robots_txt_points_to_sitemap() {
     let config = f.config();
     let output = f.root().join("dist");
 
-    build(&config, &output, false).unwrap();
+    build(&config, &output, false, false).unwrap();
 
     let robots = read(&output.join("robots.txt"));
     assert!(robots.contains("User-agent: *"));
@@ -630,7 +685,7 @@ slug: "custom-url"
     let config = f.config();
     let output = f.root().join("dist");
 
-    build(&config, &output, false).unwrap();
+    build(&config, &output, false, false).unwrap();
 
     assert!(file_exists(&output.join("posts/custom-url/index.html")));
     assert!(!file_exists(&output.join("posts/original/index.html")));
@@ -661,7 +716,7 @@ date: "2026-06-02"
     let config = f.config();
     let output = f.root().join("dist");
 
-    build(&config, &output, false).unwrap();
+    build(&config, &output, false, false).unwrap();
 
     let index = read(&output.join("index.html"));
     assert!(index.contains("Featured"));
@@ -684,7 +739,7 @@ date: "2026-06-01"
     let config = f.config();
     let output = f.root().join("dist");
 
-    build(&config, &output, false).unwrap();
+    build(&config, &output, false, false).unwrap();
 
     assert!(file_exists(&output.join("posts/my-post/index.html")));
 }
@@ -711,11 +766,14 @@ date: "2026-06-01"
     build_with_artifacts(
         &config,
         &output,
-        false,
-        BuildMode::Full,
         Some(&mut cache),
         &artifacts,
-        true,
+        BuildOptions {
+            include_drafts: false,
+            mode: BuildMode::Full,
+            emit_report: true,
+            profile: false,
+        },
     )
     .unwrap();
 
@@ -734,11 +792,14 @@ date: "2026-06-01"
     build_with_artifacts(
         &config,
         &output,
-        false,
-        BuildMode::Content,
         Some(&mut cache),
         &artifacts,
-        true,
+        BuildOptions {
+            include_drafts: false,
+            mode: BuildMode::Content,
+            emit_report: true,
+            profile: false,
+        },
     )
     .unwrap();
 

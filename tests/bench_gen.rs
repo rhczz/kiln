@@ -139,7 +139,7 @@ fn bench_build(post_count: usize) {
     let output = site.root.join("dist");
 
     let start = Instant::now();
-    build(&config, &output, false).expect("build should succeed");
+    build(&config, &output, false, false).expect("build should succeed");
     let elapsed = start.elapsed();
 
     eprintln!(
