@@ -469,10 +469,18 @@ fn public_assets_are_copied_to_output() {
 
     build(&config, &output, false, false).unwrap();
 
-    assert_eq!(
-        fs::read(output.join("images/logo.png")).unwrap(),
-        b"PNG_DATA"
-    );
+    // Fingerprintable files are hashed: read asset_manifest to locate them
+    let manifest_path = output.join("asset_manifest.json");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    let mappings = manifest["mappings"].as_object().unwrap();
+
+    let logo_hashed = mappings["images/logo.png"].as_str().unwrap();
+    assert!(logo_hashed.contains("logo."));
+    assert!(logo_hashed.ends_with(".png"));
+    assert_eq!(fs::read(output.join(logo_hashed)).unwrap(), b"PNG_DATA");
+
+    // Non-fingerprintable files keep their original names
     assert_eq!(fs::read(output.join("favicon.ico")).unwrap(), b"ICO_DATA");
     assert_eq!(fs::read(output.join("sub/deep.txt")).unwrap(), b"DEEP");
 }
@@ -508,7 +516,16 @@ date: "2026-06-01"
         },
     )
     .unwrap();
-    assert!(output.join("images/logo.png").is_file());
+
+    // Logo is fingerprintable; find its actual name from asset_manifest
+    let manifest_path = output.join("asset_manifest.json");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    let logo_hashed = manifest["mappings"]["images/logo.png"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(output.join(&logo_hashed).is_file());
 
     fs::remove_dir_all(f.root().join("public")).unwrap();
 
@@ -527,7 +544,7 @@ date: "2026-06-01"
     .unwrap();
 
     assert!(
-        !output.join("images/logo.png").exists(),
+        !output.join(&logo_hashed).exists(),
         "recorded public outputs should be removed when public/ disappears"
     );
 }

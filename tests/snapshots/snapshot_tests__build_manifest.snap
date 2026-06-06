@@ -10,70 +10,108 @@ expression: sorted
       "outputs": [
         "404.html"
       ],
-      "source": "404.html"
+      "source": "404.html",
+      "template_deps": [
+        "404.html",
+        "layout.html"
+      ],
+      "template_hash": "e9c61945f2ed"
     },
     {
       "content_hash": "420212121686",
       "outputs": [
         "posts/hello/index.html"
       ],
-      "source": "<ROOT>/content/posts/2026-06-01-hello.md"
+      "source": "<ROOT>/content/posts/2026-06-01-hello.md",
+      "template_deps": [
+        "layout.html",
+        "post.html"
+      ],
+      "template_hash": "018e609837ce"
     },
     {
       "content_hash": "assets/styles.3e67b4a9505b.css",
       "outputs": [
         "assets/styles.3e67b4a9505b.css"
       ],
-      "source": "assets/styles.css"
+      "source": "assets/styles.css",
+      "template_deps": [],
+      "template_hash": ""
     },
     {
       "content_hash": "generated",
       "outputs": [
         "robots.txt"
       ],
-      "source": "generated/robots.txt"
+      "source": "generated/robots.txt",
+      "template_deps": [],
+      "template_hash": ""
     },
     {
       "content_hash": "generated",
       "outputs": [
         "rss.xml"
       ],
-      "source": "generated/rss.xml"
+      "source": "generated/rss.xml",
+      "template_deps": [],
+      "template_hash": ""
     },
     {
       "content_hash": "generated",
       "outputs": [
         "sitemap.xml"
       ],
-      "source": "generated/sitemap.xml"
+      "source": "generated/sitemap.xml",
+      "template_deps": [],
+      "template_hash": ""
     },
     {
       "content_hash": "index.html",
       "outputs": [
         "index.html"
       ],
-      "source": "index.html"
+      "source": "index.html",
+      "template_deps": [
+        "home.html",
+        "layout.html"
+      ],
+      "template_hash": "959adac6d24e"
     },
     {
       "content_hash": "tags/index.html",
       "outputs": [
         "tags/index.html"
       ],
-      "source": "tags/index.html"
+      "source": "tags/index.html",
+      "template_deps": [
+        "layout.html",
+        "taxonomy.html"
+      ],
+      "template_hash": "fed7db03eb1c"
     },
     {
       "content_hash": "tags/snapshot/index.html",
       "outputs": [
         "tags/snapshot/index.html"
       ],
-      "source": "tags/snapshot/index.html"
+      "source": "tags/snapshot/index.html",
+      "template_deps": [
+        "layout.html",
+        "term.html"
+      ],
+      "template_hash": "1a11571fc45e"
     },
     {
       "content_hash": "tags/test/index.html",
       "outputs": [
         "tags/test/index.html"
       ],
-      "source": "tags/test/index.html"
+      "source": "tags/test/index.html",
+      "template_deps": [
+        "layout.html",
+        "term.html"
+      ],
+      "template_hash": "1a11571fc45e"
     }
   ]
 }

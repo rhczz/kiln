@@ -7,6 +7,8 @@ pub struct ProfileData {
     render_count: usize,
     page_timings: Vec<PageTiming>,
     current_page: Option<PageTimingState>,
+    pub parallel_threads: usize,
+    pub render_wall_time_ms: u128,
 }
 
 #[allow(dead_code)]
@@ -30,6 +32,8 @@ impl ProfileData {
             render_count: 0,
             page_timings: Vec::new(),
             current_page: None,
+            parallel_threads: 0,
+            render_wall_time_ms: 0,
         }
     }
 }
@@ -74,6 +78,7 @@ impl BuildTimer {
         self.end_current();
     }
 
+    #[allow(dead_code)]
     pub fn total_ms(&self) -> u128 {
         self.start.elapsed().as_millis()
     }
@@ -115,6 +120,13 @@ impl BuildTimer {
     #[allow(dead_code)]
     pub fn is_profiling(&self) -> bool {
         self.profile.is_some()
+    }
+
+    pub fn set_parallel_stats(&mut self, threads: usize, wall_time_ms: u128) {
+        if let Some(p) = &mut self.profile {
+            p.parallel_threads = threads;
+            p.render_wall_time_ms = wall_time_ms;
+        }
     }
 
     fn end_current(&mut self) {
@@ -159,6 +171,22 @@ impl BuildTimer {
             );
         } else {
             eprintln!("    no cache activity");
+        }
+
+        if p.parallel_threads > 0 {
+            eprintln!("\n  Parallel rendering:");
+            eprintln!("    {} threads", p.parallel_threads);
+            eprintln!("    render wall time: {}ms", p.render_wall_time_ms);
+            if p.render_wall_time_ms > 0 {
+                let cpu_sum: u128 = p.page_timings.iter().map(|t| t.elapsed_ms).sum();
+                if cpu_sum > 0 {
+                    let speedup = cpu_sum as f64 / p.render_wall_time_ms as f64;
+                    eprintln!(
+                        "    total cpu time: {}ms, speedup: {:.1}x",
+                        cpu_sum, speedup
+                    );
+                }
+            }
         }
 
         eprintln!("\n  Rendering:");

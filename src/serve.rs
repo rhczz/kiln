@@ -8,7 +8,7 @@ use tiny_http::{Header, Response, Server};
 enum RebuildMode {
     Content,
     Public,
-    Full,
+    Full { changed_templates: Vec<String> },
 }
 
 pub fn start(
@@ -85,7 +85,31 @@ pub fn start(
             Ok(paths) => {
                 let mode = classify_rebuild(&paths, config_path, &config);
                 pending_mode = Some(match (pending_mode.take(), mode) {
-                    (Some(RebuildMode::Full), _) | (_, RebuildMode::Full) => RebuildMode::Full,
+                    // Full always dominates; merge template lists
+                    (
+                        Some(RebuildMode::Full {
+                            changed_templates: mut prev,
+                        }),
+                        RebuildMode::Full { changed_templates },
+                    ) => {
+                        // If either side has empty list → config/style change, full invalidation
+                        if prev.is_empty() || changed_templates.is_empty() {
+                            RebuildMode::Full {
+                                changed_templates: vec![],
+                            }
+                        } else {
+                            for t in changed_templates {
+                                if !prev.contains(&t) {
+                                    prev.push(t);
+                                }
+                            }
+                            RebuildMode::Full {
+                                changed_templates: prev,
+                            }
+                        }
+                    }
+                    (Some(prev @ RebuildMode::Full { .. }), _) => prev,
+                    (_, next @ RebuildMode::Full { .. }) => next,
                     (Some(RebuildMode::Public), RebuildMode::Content)
                     | (Some(RebuildMode::Content), RebuildMode::Public)
                     | (Some(RebuildMode::Public), RebuildMode::Public) => RebuildMode::Public,
@@ -115,10 +139,33 @@ pub fn start(
                                 RebuildMode::Public => crate::site::build_public_incremental(
                                     &config, output_dir, false, &mut cache, &artifacts,
                                 ),
-                                RebuildMode::Full => {
-                                    cache.clear_renders();
+                                RebuildMode::Full { changed_templates } => {
+                                    // Reload artifacts first (templates may have changed)
                                     artifacts = crate::site::BuildArtifacts::load(&config)?;
                                     prefixes = collection_prefixes(&config);
+
+                                    if changed_templates.is_empty() {
+                                        // Config/style change → full rebuild
+                                        cache.clear_renders();
+                                    } else {
+                                        // Template-only change → selective invalidation
+                                        let manifest = crate::BuildManifest::load(output_dir)
+                                            .unwrap_or_default();
+                                        let mut deps_map: std::collections::HashMap<
+                                            std::path::PathBuf,
+                                            Vec<String>,
+                                        > = std::collections::HashMap::new();
+                                        for entry in &manifest.entries {
+                                            deps_map.insert(
+                                                entry.source.clone(),
+                                                entry.template_deps.clone(),
+                                            );
+                                        }
+                                        for tpl in &changed_templates {
+                                            cache.invalidate_by_template(tpl, &deps_map);
+                                        }
+                                    }
+
                                     crate::site::build_with_artifacts(
                                         &config,
                                         output_dir,
@@ -167,7 +214,9 @@ fn classify_rebuild(
     config: &crate::config::SiteConfig,
 ) -> RebuildMode {
     if paths.is_empty() {
-        return RebuildMode::Full;
+        return RebuildMode::Full {
+            changed_templates: vec![],
+        };
     }
 
     let template_root = Path::new(&config.paths.templates);
@@ -177,21 +226,49 @@ fn classify_rebuild(
 
     let mut saw_content = false;
     let mut saw_public = false;
+    let mut changed_templates: Vec<String> = Vec::new();
+
     for path in paths {
-        if path == config_path || path.starts_with(template_root) || path.starts_with(styles_path) {
-            return RebuildMode::Full;
+        // Config or styles change → full rebuild (no selective invalidation)
+        if path == config_path || path.starts_with(styles_path) {
+            return RebuildMode::Full {
+                changed_templates: vec![],
+            };
+        }
+        // Template change → track which templates changed
+        if path.starts_with(template_root) {
+            if let Ok(rel) = path.strip_prefix(template_root) {
+                let name = rel.to_string_lossy().replace('\\', "/");
+                changed_templates.push(name);
+            }
+            continue;
         }
         if path.starts_with(public_root) {
             saw_public = true;
         } else if path.starts_with(content_root) {
             saw_content = true;
-        } else if !path.starts_with(content_root) {
-            return RebuildMode::Full;
+        } else {
+            // Unknown path → full rebuild
+            return RebuildMode::Full {
+                changed_templates: vec![],
+            };
         }
     }
 
+    // Template changes → selective invalidation instead of full rebuild
+    if !changed_templates.is_empty() {
+        if saw_content || saw_public {
+            return RebuildMode::Full {
+                changed_templates: vec![],
+            };
+        }
+        return RebuildMode::Full { changed_templates };
+    }
+
     if saw_public && saw_content {
-        RebuildMode::Full
+        RebuildMode::Full {
+            changed_templates: vec![],
+        }
     } else if saw_public {
         RebuildMode::Public
     } else {
@@ -342,7 +419,7 @@ mod tests {
 
         assert!(matches!(
             classify_rebuild(&paths, Path::new("/site/site.config.toml"), &config),
-            RebuildMode::Full
+            RebuildMode::Full { .. }
         ));
     }
 
@@ -355,6 +432,18 @@ mod tests {
             classify_rebuild(&paths, Path::new("/site/site.config.toml"), &config),
             RebuildMode::Public
         ));
+    }
+
+    #[test]
+    fn classify_rebuild_template_change_returns_full_with_templates() {
+        let config = test_config();
+        let paths = vec![PathBuf::from("/site/templates/post.html")];
+
+        let mode = classify_rebuild(&paths, Path::new("/site/site.config.toml"), &config);
+        assert!(matches!(&mode, RebuildMode::Full { .. }));
+        if let RebuildMode::Full { changed_templates } = &mode {
+            assert_eq!(changed_templates, &vec!["post.html".to_string()]);
+        }
     }
 
     fn temp_dir(prefix: &str) -> std::path::PathBuf {

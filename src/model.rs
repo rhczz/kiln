@@ -61,7 +61,7 @@ pub struct Term {
     pub url: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SiteModel {
     pub pages: Vec<Page>,
     pub sections: HashMap<String, Section>,
