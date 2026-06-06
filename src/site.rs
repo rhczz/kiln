@@ -753,8 +753,7 @@ fn render_term_page(
         .split('/')
         .next()
         .map(|s| s.to_string());
-    let template =
-        effective_term_template(env.engine, &page.template, taxonomy_slug.as_deref());
+    let template = effective_term_template(env.engine, &page.template, taxonomy_slug.as_deref());
     let body = env.engine.render(&template, &ctx)?;
     let dir_path = page.url.trim_start_matches('/').trim_end_matches('/');
     wrap_with_layout(env, &page.title, &page.description, &body, dir_path, false)
