@@ -209,7 +209,12 @@ pub fn register_asset_url_fn(
     tera.register_function(
         "asset_url",
         move |args: &std::collections::HashMap<String, tera::Value>| {
-            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            // Support both asset_url("style.css") and asset_url(path="style.css")
+            let path = args
+                .get("path")
+                .or_else(|| args.get("0"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let normalized = path.trim_start_matches("./").trim_start_matches('/');
             let guard = mappings
                 .read()

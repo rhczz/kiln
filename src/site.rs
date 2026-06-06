@@ -231,6 +231,7 @@ pub fn build_with_artifacts(
         &artifacts.style_asset,
         &sitemap_files,
         &artifacts.engine,
+        &config.paginate_path,
     );
     manifest.save(output_dir)?;
 
@@ -298,7 +299,7 @@ fn page_render_key(
         .as_ref()
         .map(|item| item.content_hash.clone())
         .unwrap_or_else(|| generic_page_content_hash(page, site_model));
-    let template_deps = page_template_deps(env.engine, page, site_model);
+    let template_deps = page_template_deps(env.engine, page, site_model, &env.config.paginate_path);
     let template_hash = template_deps_hash(env.engine, &template_deps);
     let render_hash = BuildCache::build_render_hash(
         &content_hash,
@@ -407,6 +408,10 @@ fn render_model_pages(
                         );
                     }
                 }
+                let asset_mappings: std::sync::Arc<
+                    std::sync::RwLock<std::collections::HashMap<String, String>>,
+                > = std::sync::Arc::new(std::sync::RwLock::new((*a_manifest).mappings.clone()));
+                let _ = crate::engine::register_asset_url_fn(&mut tera, asset_mappings);
                 let engine = crate::engine::Engine::init_tera_only(tera);
 
                 let style_asset = StyleAsset {
@@ -1066,6 +1071,7 @@ fn record_manifest_entries(
     style_asset: &StyleAsset,
     sitemap_files: &[(String, String)],
     engine: &Engine,
+    paginate_path: &str,
 ) {
     for page in &site_model.pages {
         let source = page
@@ -1077,7 +1083,7 @@ fn record_manifest_entries(
             .as_ref()
             .map(|item| item.content_hash.clone())
             .unwrap_or_else(|| page.output_path.to_string_lossy().to_string());
-        let template_deps = page_template_deps(engine, page, site_model);
+        let template_deps = page_template_deps(engine, page, site_model, paginate_path);
         let template_hash = template_deps_hash(engine, &template_deps);
         manifest.record(
             source,
@@ -1129,12 +1135,33 @@ fn effective_template_for_page(
     engine: &Engine,
     page: &model::Page,
     site_model: &model::SiteModel,
+    paginate_path: &str,
 ) -> String {
     match page.kind {
-        model::PageKind::Single
-        | model::PageKind::Home
-        | model::PageKind::NotFound
-        | model::PageKind::Paginate => page.template.clone(),
+        model::PageKind::Single | model::PageKind::Home | model::PageKind::NotFound => {
+            page.template.clone()
+        }
+        model::PageKind::Paginate => {
+            let base_url = derive_paginate_base(&page.url, paginate_path);
+            if base_url == "/" {
+                engine.resolve_template(&model::PageKind::Home, None)
+            } else if site_model.sections.values().any(|s| s.url == base_url) {
+                let collection = site_model
+                    .sections
+                    .values()
+                    .find(|s| s.url == base_url)
+                    .map(|s| s.collection.as_str());
+                engine.resolve_template(&model::PageKind::Section, collection)
+            } else {
+                let tax_slug = site_model.taxonomies.values().find_map(|t| {
+                    t.terms
+                        .iter()
+                        .find(|term| term.url == base_url)
+                        .map(|_| t.slug.as_str())
+                });
+                engine.resolve_template(&model::PageKind::Term, tax_slug)
+            }
+        }
         model::PageKind::Section => {
             let collection = site_model
                 .sections
@@ -1160,8 +1187,9 @@ fn page_template_deps(
     engine: &Engine,
     page: &model::Page,
     site_model: &model::SiteModel,
+    paginate_path: &str,
 ) -> Vec<String> {
-    let effective = effective_template_for_page(engine, page, site_model);
+    let effective = effective_template_for_page(engine, page, site_model, paginate_path);
     let mut deps: Vec<String> = engine.template_deps(&effective);
     // All pages go through wrap_with_layout → layout.html
     if effective != "layout.html" {
