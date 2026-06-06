@@ -171,8 +171,10 @@ pub fn build_with_artifacts(
         ),
     )?;
 
-    let mut manifest = crate::BuildManifest::default();
-    manifest.config_hash = build_config_hash(config);
+    let mut manifest = crate::BuildManifest {
+        config_hash: build_config_hash(config),
+        ..Default::default()
+    };
     record_manifest_entries(
         &mut manifest,
         &site_model,
@@ -432,7 +434,7 @@ fn render_term_page(
                         })
                         .unwrap_or(false)
                 })
-                .map(|i| make_item_base(i))
+                .map(make_item_base)
                 .collect();
             let paginator = paginator
                 .cloned()
@@ -627,7 +629,7 @@ fn section_items(site_model: &model::SiteModel, section_url: &str) -> Vec<serde_
         .all_items
         .iter()
         .filter(|item| model::url_is_under_section(&item.url, section_url))
-        .map(|i| make_item_base(i))
+        .map(make_item_base)
         .collect()
 }
 

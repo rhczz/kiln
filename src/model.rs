@@ -132,7 +132,7 @@ pub fn build_site_model(
     // Sections
     let sections = build_sections(&all_items, collections, &config.paths.content);
     let mut section_list: Vec<&Section> = sections.values().collect();
-    section_list.sort_by(|a, b| section_sort_key(a).cmp(&section_sort_key(b)));
+    section_list.sort_by_key(|a| section_sort_key(a));
 
     // Add section pages
     for section in &section_list {
@@ -161,7 +161,7 @@ pub fn build_site_model(
 
     let taxonomies = build_taxonomies(&all_items, &taxonomy_configs);
     let mut taxonomy_list: Vec<&Taxonomy> = taxonomies.values().collect();
-    taxonomy_list.sort_by(|a, b| taxonomy_sort_key(a).cmp(&taxonomy_sort_key(b)));
+    taxonomy_list.sort_by_key(|a| taxonomy_sort_key(a));
 
     // Add taxonomy index and term pages
     for tax in &taxonomy_list {
