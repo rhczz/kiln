@@ -85,9 +85,31 @@ pub fn start(
             Ok(paths) => {
                 let mode = classify_rebuild(&paths, config_path, &config);
                 pending_mode = Some(match (pending_mode.take(), mode) {
-                    // Full always dominates
-                    (Some(rebuild_mode @ RebuildMode::Full { .. }), _)
-                    | (_, rebuild_mode @ RebuildMode::Full { .. }) => rebuild_mode,
+                    // Full always dominates; merge template lists
+                    (
+                        Some(RebuildMode::Full {
+                            changed_templates: mut prev,
+                        }),
+                        RebuildMode::Full { changed_templates },
+                    ) => {
+                        // If either side has empty list → config/style change, full invalidation
+                        if prev.is_empty() || changed_templates.is_empty() {
+                            RebuildMode::Full {
+                                changed_templates: vec![],
+                            }
+                        } else {
+                            for t in changed_templates {
+                                if !prev.contains(&t) {
+                                    prev.push(t);
+                                }
+                            }
+                            RebuildMode::Full {
+                                changed_templates: prev,
+                            }
+                        }
+                    }
+                    (Some(prev @ RebuildMode::Full { .. }), _) => prev,
+                    (_, next @ RebuildMode::Full { .. }) => next,
                     (Some(RebuildMode::Public), RebuildMode::Content)
                     | (Some(RebuildMode::Content), RebuildMode::Public)
                     | (Some(RebuildMode::Public), RebuildMode::Public) => RebuildMode::Public,

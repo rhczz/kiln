@@ -179,9 +179,17 @@ impl BuildCache {
         (self.cache_hits.get(), self.cache_misses.get())
     }
 
-    /// Build a 3-level cache key: content_hash:template_hash:config_hash
-    pub fn build_render_hash(content_hash: &str, template_hash: &str, config_hash: &str) -> String {
-        format!("{}:{}:{}", content_hash, template_hash, config_hash)
+    /// Build a 4-level cache key: content:template:config:asset
+    pub fn build_render_hash(
+        content_hash: &str,
+        template_hash: &str,
+        config_hash: &str,
+        asset_hash: &str,
+    ) -> String {
+        format!(
+            "{}:{}:{}:{}",
+            content_hash, template_hash, config_hash, asset_hash
+        )
     }
 }
 

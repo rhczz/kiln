@@ -16,6 +16,7 @@ const DEFAULT_404: &str = include_str!("defaults/404.html");
 pub struct Engine {
     tera: tera::Tera,
     template_sources: HashMap<String, String>,
+    asset_mappings: std::sync::Arc<std::sync::RwLock<std::collections::HashMap<String, String>>>,
 }
 
 impl Engine {
@@ -60,10 +61,21 @@ impl Engine {
             }
         }
 
+        let asset_mappings =
+            std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
+        register_asset_url_fn(&mut tera, asset_mappings.clone())?;
+
         Ok(Self {
             tera,
             template_sources,
+            asset_mappings,
         })
+    }
+
+    pub fn update_asset_mappings(&self, mappings: std::collections::HashMap<String, String>) {
+        if let Ok(mut guard) = self.asset_mappings.write() {
+            *guard = mappings;
+        }
     }
 
     pub fn render(&self, template: &str, context: &tera::Context) -> anyhow::Result<String> {
@@ -139,6 +151,7 @@ impl Engine {
         self.template_sources.keys().map(|s| s.as_str()).collect()
     }
 
+    /// Mutable access to the underlying Tera for registering runtime functions.
     /// Returns shared access to template sources, used for parallel rendering
     /// where each thread builds its own Tera instance.
     pub fn shared_template_sources(
@@ -153,6 +166,9 @@ impl Engine {
         Self {
             tera,
             template_sources: HashMap::new(),
+            asset_mappings: std::sync::Arc::new(std::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
         }
     }
 
@@ -184,6 +200,30 @@ impl Engine {
     }
 }
 
+/// Register `asset_url(path)` as a Tera global function.
+/// After registration, templates can use `{{ asset_url(path="style.css") }}`.
+pub fn register_asset_url_fn(
+    tera: &mut tera::Tera,
+    mappings: std::sync::Arc<std::sync::RwLock<std::collections::HashMap<String, String>>>,
+) -> tera::Result<()> {
+    tera.register_function(
+        "asset_url",
+        move |args: &std::collections::HashMap<String, tera::Value>| {
+            let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+            let normalized = path.trim_start_matches("./").trim_start_matches('/');
+            let guard = mappings
+                .read()
+                .map_err(|e| tera::Error::msg(e.to_string()))?;
+            let resolved = guard
+                .get(normalized)
+                .cloned()
+                .unwrap_or_else(|| path.to_string());
+            Ok(tera::Value::String(resolved))
+        },
+    );
+    Ok(())
+}
+
 /// Extract template names from `{% extends "..." %}`, `{% include "..." %}`,
 /// and `{% import "..." %}` directives using simple string scanning.
 fn extract_template_deps(source: &str) -> Vec<String> {
@@ -202,13 +242,15 @@ fn extract_template_deps(source: &str) -> Vec<String> {
         // Strip whitespace control characters from tag body: {%- ... -%}
         let inner = tag_content[2..tag_end].trim_matches(|c: char| c.is_whitespace() || c == '-');
 
-        // Check for extends, include, or import
+        // Check for extends, include, import, or from
         let directive = if inner.starts_with("extends") {
             "extends"
         } else if inner.starts_with("include") {
             "include"
         } else if inner.starts_with("import") {
             "import"
+        } else if inner.starts_with("from") {
+            "from"
         } else {
             pos = abs + tag_end + 2;
             continue;

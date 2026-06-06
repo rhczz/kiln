@@ -12,9 +12,10 @@ expression: sorted
       ],
       "source": "404.html",
       "template_deps": [
-        "404.html"
+        "404.html",
+        "layout.html"
       ],
-      "template_hash": "c134e9e89a99"
+      "template_hash": "e9c61945f2ed"
     },
     {
       "content_hash": "420212121686",

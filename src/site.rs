@@ -69,7 +69,6 @@ pub struct BuildOptions {
 pub struct BuildArtifacts {
     pub engine: Engine,
     pub style_asset: StyleAsset,
-    pub asset_manifest: crate::AssetManifest,
 }
 
 impl BuildArtifacts {
@@ -77,7 +76,6 @@ impl BuildArtifacts {
         Ok(Self {
             engine: Engine::init(Path::new(&config.paths.templates))?,
             style_asset: StyleAsset::from_file(Path::new(&config.paths.styles))?,
-            asset_manifest: crate::AssetManifest::default(),
         })
     }
 }
@@ -108,10 +106,20 @@ pub fn build_with_artifacts(
 
     timer.phase("copy_public");
     let asset_manifest = if !matches!(opts.mode, BuildMode::Content) {
+        let prev_manifest = crate::AssetManifest::load(output_dir).unwrap_or_default();
         let manifest =
             crate::asset::fingerprint_public(Path::new(&config.paths.public), output_dir)?;
         manifest.save(output_dir)?;
         crate::asset::prune_stale(&manifest, output_dir)?;
+        // Also remove stale non-fingerprinted files from previous manifest
+        for orig in prev_manifest.mappings.keys() {
+            if !manifest.mappings.contains_key(orig) {
+                let path = output_dir.join(orig);
+                if path.is_file() {
+                    let _ = std::fs::remove_file(&path);
+                }
+            }
+        }
         if let Some(cache) = cache.as_mut() {
             for (orig, hashed) in &manifest.mappings {
                 cache.store_public_hash(
@@ -129,13 +137,6 @@ pub fn build_with_artifacts(
     } else {
         crate::AssetManifest::load(output_dir).unwrap_or_default()
     };
-
-    if matches!(opts.mode, BuildMode::Public) {
-        rewrite_404_stylesheet(output_dir, &artifacts.style_asset)?;
-        timer.finish();
-        eprintln!("Public build done in {}ms", timer.total_ms());
-        return Ok(());
-    }
 
     timer.phase("load_content");
     let all_items: Vec<ContentItem> = {
@@ -157,6 +158,11 @@ pub fn build_with_artifacts(
     };
 
     let config_hash = build_config_hash(config);
+    let asset_hash = asset_manifest.content_hash();
+    // Update the engine's asset_url function with the current manifest
+    artifacts
+        .engine
+        .update_asset_mappings(asset_manifest.mappings.clone());
 
     timer.phase("render_pages");
     let site_model = model::build_site_model(all_items, &collections, config);
@@ -168,6 +174,7 @@ pub fn build_with_artifacts(
         output_dir,
         asset_manifest: &asset_manifest,
         config_hash: &config_hash,
+        asset_hash: &asset_hash,
     };
     render_model_pages(
         &render_env,
@@ -276,6 +283,7 @@ struct RenderEnv<'a> {
     output_dir: &'a Path,
     asset_manifest: &'a crate::AssetManifest,
     config_hash: &'a str,
+    asset_hash: &'a str,
 }
 
 /// Computes the 3-level render hash for a page (content + template + config).
@@ -290,9 +298,14 @@ fn page_render_key(
         .as_ref()
         .map(|item| item.content_hash.clone())
         .unwrap_or_else(|| generic_page_content_hash(page, site_model));
-    let template_deps = page_template_deps(env.engine, page);
+    let template_deps = page_template_deps(env.engine, page, site_model);
     let template_hash = template_deps_hash(env.engine, &template_deps);
-    let render_hash = BuildCache::build_render_hash(&content_hash, &template_hash, env.config_hash);
+    let render_hash = BuildCache::build_render_hash(
+        &content_hash,
+        &template_hash,
+        env.config_hash,
+        env.asset_hash,
+    );
     (content_hash, render_hash)
 }
 
@@ -362,12 +375,12 @@ fn render_model_pages(
     let asset_manifest = Arc::new(env.asset_manifest.clone());
     let shared_site_model = Arc::new(site_model.clone());
 
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    let parallel_start = std::time::Instant::now();
     let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(
-            std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(4),
-        )
+        .worker_threads(threads)
         .build()?;
 
     let results: Vec<(usize, anyhow::Result<String>)> = rt.block_on(async {
@@ -402,6 +415,7 @@ fn render_model_pages(
                     content: s_content.to_vec(),
                 };
                 let manifest: crate::AssetManifest = (*a_manifest).clone();
+                let asset_hash = manifest.content_hash();
                 let render_env = RenderEnv {
                     engine: &engine,
                     config: &cfg,
@@ -409,6 +423,7 @@ fn render_model_pages(
                     output_dir: std::path::Path::new(""),
                     asset_manifest: &manifest,
                     config_hash: &c_hash,
+                    asset_hash: &asset_hash,
                 };
 
                 match render_one_page(&render_env, &sm, &task.page) {
@@ -427,6 +442,9 @@ fn render_model_pages(
         }
         results
     });
+
+    let wall_time = parallel_start.elapsed().as_millis();
+    timer.set_parallel_stats(threads, wall_time);
 
     // Phase 4: write results in order, update cache
     results
@@ -480,46 +498,59 @@ fn render_one_page(
 
 /// Compute a content hash for non-Single pages based on their input data.
 fn generic_page_content_hash(page: &model::Page, site_model: &model::SiteModel) -> String {
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut parts: Vec<String> = Vec::new();
     match page.kind {
         model::PageKind::Home => {
-            for item in &site_model.all_items {
-                item.content_hash.hash(&mut hasher);
-            }
+            let mut hashes: Vec<&str> = site_model
+                .all_items
+                .iter()
+                .map(|i| i.content_hash.as_str())
+                .collect();
+            hashes.sort();
+            parts.extend(hashes.iter().map(|s| s.to_string()));
         }
         model::PageKind::Section => {
-            // Hash the content hashes of items under this section
-            for item in &site_model.all_items {
-                if crate::model::url_is_under_section(&item.url, &page.url) {
-                    item.content_hash.hash(&mut hasher);
-                }
-            }
-            page.url.hash(&mut hasher);
+            let mut hashes: Vec<&str> = site_model
+                .all_items
+                .iter()
+                .filter(|i| crate::model::url_is_under_section(&i.url, &page.url))
+                .map(|i| i.content_hash.as_str())
+                .collect();
+            hashes.sort();
+            parts.extend(hashes.iter().map(|s| s.to_string()));
+            parts.push(page.url.clone());
         }
         model::PageKind::TaxonomyIndex | model::PageKind::Term => {
-            // Taxonomy pages depend on items with taxonomies
-            page.title.hash(&mut hasher);
-            for item in &site_model.all_items {
-                item.content_hash.hash(&mut hasher);
-            }
+            parts.push(page.title.clone());
+            let mut hashes: Vec<&str> = site_model
+                .all_items
+                .iter()
+                .map(|i| i.content_hash.as_str())
+                .collect();
+            hashes.sort();
+            parts.extend(hashes.iter().map(|s| s.to_string()));
         }
         model::PageKind::Paginate => {
-            // Conservative: any content change invalidates all paginate pages
-            for item in &site_model.all_items {
-                item.content_hash.hash(&mut hasher);
-            }
-            page.url.hash(&mut hasher);
+            let mut hashes: Vec<&str> = site_model
+                .all_items
+                .iter()
+                .map(|i| i.content_hash.as_str())
+                .collect();
+            hashes.sort();
+            parts.extend(hashes.iter().map(|s| s.to_string()));
+            parts.push(page.url.clone());
         }
         model::PageKind::NotFound => {
-            "404".hash(&mut hasher);
+            parts.push("404".into());
         }
         _ => {
-            page.url.hash(&mut hasher);
+            parts.push(page.url.clone());
         }
     }
-    format!("{:x}", hasher.finish())
+    if parts.is_empty() {
+        return String::new();
+    }
+    crate::content::fingerprint(parts.join("\0").as_bytes())
 }
 
 fn render_single(
@@ -1046,7 +1077,7 @@ fn record_manifest_entries(
             .as_ref()
             .map(|item| item.content_hash.clone())
             .unwrap_or_else(|| page.output_path.to_string_lossy().to_string());
-        let template_deps = page_template_deps(engine, page);
+        let template_deps = page_template_deps(engine, page, site_model);
         let template_hash = template_deps_hash(engine, &template_deps);
         manifest.record(
             source,
@@ -1092,13 +1123,62 @@ fn record_manifest_entries(
 
 /// Returns the full template dependency chain for a page, including
 /// the transitive deps of both the page template and layout.html.
-fn page_template_deps(engine: &Engine, page: &model::Page) -> Vec<String> {
-    let mut deps: Vec<String> = engine.template_deps(&page.template);
-    // All pages go through wrap_with_layout → layout.html (except 404)
-    let uses_layout = !matches!(page.kind, model::PageKind::NotFound);
-    if uses_layout && page.template != "layout.html" {
+/// Returns the actual template used for rendering this page,
+/// matching the resolve_template() logic in the render functions.
+fn effective_template_for_page(
+    engine: &Engine,
+    page: &model::Page,
+    site_model: &model::SiteModel,
+) -> String {
+    match page.kind {
+        model::PageKind::Single
+        | model::PageKind::Home
+        | model::PageKind::NotFound
+        | model::PageKind::Paginate => page.template.clone(),
+        model::PageKind::Section => {
+            let collection = site_model
+                .sections
+                .values()
+                .find(|s| s.url == page.url)
+                .map(|s| s.collection.as_str());
+            engine.resolve_template(&page.kind, collection)
+        }
+        model::PageKind::TaxonomyIndex => engine.resolve_template(&page.kind, None),
+        model::PageKind::Term => {
+            let tax_slug = site_model.taxonomies.values().find_map(|t| {
+                t.terms
+                    .iter()
+                    .find(|term| term.url == page.url)
+                    .map(|_| t.slug.as_str())
+            });
+            engine.resolve_template(&page.kind, tax_slug)
+        }
+    }
+}
+
+fn page_template_deps(
+    engine: &Engine,
+    page: &model::Page,
+    site_model: &model::SiteModel,
+) -> Vec<String> {
+    let effective = effective_template_for_page(engine, page, site_model);
+    let mut deps: Vec<String> = engine.template_deps(&effective);
+    // All pages go through wrap_with_layout → layout.html
+    if effective != "layout.html" {
         for dep in engine.template_deps("layout.html") {
             deps.push(dep);
+        }
+    }
+    // Shortcode templates used by this page
+    if let Some(item) = &page.content_item {
+        for sc in &item.shortcodes {
+            let sc_tpl = format!("shortcodes/{}.html", sc.name);
+            if engine.template_exists(&sc_tpl) {
+                deps.push(sc_tpl.clone());
+                for dep in engine.template_deps(&sc_tpl) {
+                    deps.push(dep);
+                }
+            }
         }
     }
     deps.sort();
