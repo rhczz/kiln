@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use std::cmp::Reverse;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::config::CollectionConfig;
@@ -26,8 +27,12 @@ pub struct ContentItem {
     pub featured: bool,
     pub draft: bool,
     pub tags: Vec<String>,
+    pub taxonomy_terms: HashMap<String, Vec<String>>,
     #[serde(skip)]
     pub raw_date: Option<chrono::NaiveDate>,
+    pub headings: Vec<crate::render::Heading>,
+    #[serde(skip)]
+    pub shortcodes: Vec<crate::shortcode::Shortcode>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -45,6 +50,8 @@ struct ItemFrontmatter {
     tags: Vec<String>,
     #[serde(default)]
     slug: String,
+    #[serde(flatten)]
+    extra: HashMap<String, serde_yaml::Value>,
 }
 
 pub fn load_collection(
@@ -79,17 +86,24 @@ fn load_collection_entries(
     include_drafts: bool,
     mut cache: Option<&mut crate::cache::BuildCache>,
 ) -> anyhow::Result<Vec<ContentItem>> {
-    let pattern = format!("{}/{}/*.md", content_dir, collection.directory);
+    let collection_path = std::path::Path::new(content_dir).join(&collection.directory);
+    let pattern = format!("{}/**/*.md", collection_path.to_string_lossy());
     let mut items: Vec<ContentItem> = Vec::new();
 
     for entry in glob::glob(&pattern)? {
         let path = entry?;
+
+        // Skip _index.md (section index files)
+        if path.file_name().map(|n| n == "_index.md").unwrap_or(false) {
+            continue;
+        }
+
         let raw = std::fs::read_to_string(&path)?;
 
         let item = if let Some(cache) = cache.as_deref_mut() {
-            cache.parse_content_item(&path, &raw, collection, include_drafts)?
+            cache.parse_content_item(&path, &raw, collection, include_drafts, &collection_path)?
         } else {
-            parse_content_item(&path, &raw, collection, include_drafts)?
+            parse_content_item(&path, &raw, collection, include_drafts, &collection_path)?
         };
 
         if let Some(item) = item {
@@ -105,24 +119,37 @@ pub(crate) fn parse_content_item(
     raw: &str,
     collection: &CollectionConfig,
     include_drafts: bool,
+    collection_dir: &Path,
 ) -> anyhow::Result<Option<ContentItem>> {
     let fingerprint = fingerprint(raw.as_bytes());
     let (fm_str, body) = split_frontmatter(raw);
-    let fm: ItemFrontmatter = serde_yaml::from_str(fm_str)
-        .map_err(|e| anyhow::anyhow!("Failed to parse frontmatter in {:?}: {}", path, e))?;
+    let fm: ItemFrontmatter = serde_yaml::from_str(fm_str).map_err(|e| {
+        if let Some(location) = e.location() {
+            anyhow::anyhow!(
+                "Failed to parse frontmatter in {:?} at line {}: {}",
+                path,
+                location.line() + 1,
+                e
+            )
+        } else {
+            anyhow::anyhow!("Failed to parse frontmatter in {:?}: {}", path, e)
+        }
+    })?;
 
     if fm.draft && !include_drafts {
         return Ok(None);
     }
 
+    let taxonomy_terms = extract_taxonomy_terms(&fm);
     let slug = if fm.slug.is_empty() {
-        derive_slug(path)
+        derive_slug(path, collection_dir)
     } else {
         fm.slug
     };
 
     let url = collection.route.replace("{slug}", &slug);
-    let body_html = render::markdown_to_html(body);
+    let (processed_body, shortcodes) = crate::shortcode::preprocess(body);
+    let rendered = render::markdown_to_html(&processed_body);
 
     let (date, iso_date, short_date, long_date, year, raw_date) = if collection.date_ordered {
         let date_str = fm.date.unwrap_or_default();
@@ -146,7 +173,7 @@ pub(crate) fn parse_content_item(
     let description = if fm.description.is_empty() {
         extract_description(body)
     } else {
-        fm.description
+        fm.description.clone()
     };
 
     Ok(Some(ContentItem {
@@ -155,7 +182,7 @@ pub(crate) fn parse_content_item(
         title: fm.title,
         slug,
         description,
-        body_html,
+        body_html: rendered.html,
         collection: collection.name.clone(),
         url,
         date,
@@ -166,7 +193,10 @@ pub(crate) fn parse_content_item(
         featured: fm.featured,
         draft: fm.draft,
         tags: fm.tags,
+        taxonomy_terms,
         raw_date,
+        headings: rendered.headings,
+        shortcodes,
     }))
 }
 
@@ -212,12 +242,71 @@ fn split_frontmatter(raw: &str) -> (&str, &str) {
     ("", raw)
 }
 
-fn derive_slug(path: &std::path::Path) -> String {
-    let name = path
+fn derive_slug(path: &std::path::Path, collection_dir: &std::path::Path) -> String {
+    let relative = path.strip_prefix(collection_dir).unwrap_or(path);
+    let parent = relative
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .filter(|p| !p.is_empty() && p != ".");
+    let stem = path
         .file_stem()
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
+    let stripped = strip_date_prefix(&stem);
+    match parent {
+        Some(dir) => format!("{}/{}", dir, stripped),
+        None => stripped,
+    }
+}
+
+fn extract_taxonomy_terms(fm: &ItemFrontmatter) -> HashMap<String, Vec<String>> {
+    let mut taxonomy_terms = HashMap::new();
+
+    if !fm.tags.is_empty() {
+        taxonomy_terms.insert("tags".into(), fm.tags.clone());
+    }
+
+    for (key, value) in &fm.extra {
+        if matches!(
+            key.as_str(),
+            "title" | "date" | "description" | "featured" | "draft" | "tags" | "slug"
+        ) {
+            continue;
+        }
+
+        if let Some(values) = yaml_value_to_strings(value) {
+            taxonomy_terms.insert(key.clone(), values);
+        }
+    }
+
+    taxonomy_terms
+}
+
+fn yaml_value_to_strings(value: &serde_yaml::Value) -> Option<Vec<String>> {
+    match value {
+        serde_yaml::Value::Sequence(seq) => {
+            let values: Vec<String> = seq.iter().filter_map(yaml_scalar_to_string).collect();
+            if values.is_empty() {
+                None
+            } else {
+                Some(values)
+            }
+        }
+        _ => yaml_scalar_to_string(value).map(|value| vec![value]),
+    }
+}
+
+fn yaml_scalar_to_string(value: &serde_yaml::Value) -> Option<String> {
+    match value {
+        serde_yaml::Value::String(s) => Some(s.clone()),
+        serde_yaml::Value::Number(n) => Some(n.to_string()),
+        serde_yaml::Value::Bool(b) => Some(b.to_string()),
+        _ => None,
+    }
+}
+
+fn strip_date_prefix(name: &str) -> String {
     let bytes = name.as_bytes();
     if bytes.len() >= 11
         && bytes[0].is_ascii_digit()
@@ -234,7 +323,7 @@ fn derive_slug(path: &std::path::Path) -> String {
     {
         name[11..].to_string()
     } else {
-        name
+        name.to_string()
     }
 }
 
@@ -245,6 +334,15 @@ fn extract_description(body: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+pub(crate) fn slugify(value: &str) -> String {
+    value
+        .to_lowercase()
+        .replace([' ', '_'], "-")
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-')
+        .collect()
 }
 
 #[cfg(test)]

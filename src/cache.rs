@@ -41,6 +41,7 @@ impl BuildCache {
         raw: &str,
         collection: &CollectionConfig,
         include_drafts: bool,
+        collection_dir: &Path,
     ) -> anyhow::Result<Option<ContentItem>> {
         let hash = content::fingerprint(raw.as_bytes());
         if let Some(cached) = self.content_items.get(path) {
@@ -52,7 +53,8 @@ impl BuildCache {
             }
         }
 
-        let parsed = content::parse_content_item(path, raw, collection, include_drafts)?;
+        let parsed =
+            content::parse_content_item(path, raw, collection, include_drafts, collection_dir)?;
         if let Some(item) = parsed.as_ref() {
             self.content_items.insert(
                 path.to_path_buf(),

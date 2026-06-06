@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use kiln::{
-    build, build_with_artifacts, AuthorConfig, BuildArtifacts, BuildCache, BuildMode, FeedConfig,
-    PathsConfig, SiteConfig, SiteMeta,
+    build, build_with_artifacts, AuthorConfig, BuildArtifacts, BuildCache, BuildMode,
+    CollectionConfig, FeedConfig, PageKind, PathsConfig, SiteConfig, SiteMeta, TaxonomyConfig,
 };
 
 struct FixtureBuilder {
@@ -60,11 +60,23 @@ impl FixtureBuilder {
             feed: FeedConfig { item_count: 20 },
             collections: vec![],
             extra: toml::Value::Table(Default::default()),
+            taxonomies: vec![],
+            paginate_by: 0,
+            paginate_path: "page".into(),
+            menus: Default::default(),
         }
     }
 
     fn write_styles(&self, css: &str) {
         fs::write(self.root.join("styles.css"), css).unwrap();
+    }
+
+    fn write_template(&self, relative_path: &str, content: &str) {
+        let path = self.root.join("templates").join(relative_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, content).unwrap();
     }
 
     fn write_post(&self, filename: &str, frontmatter: &str, body: &str) {
@@ -187,6 +199,47 @@ featured: {}
     }
 }
 
+#[test]
+fn paginated_home_pages_slice_archive() {
+    let f = FixtureBuilder::new("paginate");
+    f.write_styles("body {}");
+
+    for i in 1..=3 {
+        let day = format!("{:02}", i);
+        f.write_post(
+            &format!("2026-06-{}-post-{}.md", day, i),
+            &format!(
+                r#"title: "Post {}"
+date: "2026-06-{}"
+"#,
+                i, day
+            ),
+            &format!("Content of post {}.", i),
+        );
+    }
+
+    let mut config = f.config();
+    config.paginate_by = 1;
+    let output = f.root().join("dist");
+
+    build(&config, &output, false).unwrap();
+
+    let index = read(&output.join("index.html"));
+    assert!(index.contains("Post 3"));
+    assert!(!index.contains("Post 2"));
+    assert!(!index.contains("Post 1"));
+
+    let page2 = read(&output.join("page/2/index.html"));
+    assert!(page2.contains("Page 2"));
+    assert!(page2.contains("Post 2"));
+    assert!(!page2.contains("Post 3"));
+
+    let page3 = read(&output.join("page/3/index.html"));
+    assert!(page3.contains("Page 3"));
+    assert!(page3.contains("Post 1"));
+    assert!(!page3.contains("Post 2"));
+}
+
 // --- Pages without dates ---
 
 #[test]
@@ -208,6 +261,197 @@ fn pages_without_dates_render_correctly() {
 
     let contact = read(&output.join("contact/index.html"));
     assert!(contact.contains("Contact"));
+}
+
+#[test]
+fn custom_taxonomy_uses_configured_term_template() {
+    let f = FixtureBuilder::new("taxonomy");
+    f.write_styles("body {}");
+    f.write_template("category_term.html", "CUSTOM TERM {{ term.name }}");
+    f.write_post(
+        "2026-06-01-rusty.md",
+        r#"title: "Rusty"
+date: "2026-06-01"
+categories: ["Rust"]
+"#,
+        "Rust content.",
+    );
+
+    let mut config = f.config();
+    config.taxonomies = vec![TaxonomyConfig {
+        name: "categories".into(),
+        slug: "categories".into(),
+        template: "category_term.html".into(),
+    }];
+    let output = f.root().join("dist");
+
+    build(&config, &output, false).unwrap();
+
+    assert!(output.join("categories/index.html").is_file());
+    let term = read(&output.join("categories/rust/index.html"));
+    assert!(term.contains("CUSTOM TERM Rust"));
+}
+
+#[test]
+fn custom_collection_route_uses_collection_section_template() {
+    let f = FixtureBuilder::new("section-template");
+    f.write_styles("body {}");
+    f.write_template("posts_section.html", "CUSTOM SECTION {{ section.title }}");
+
+    let docs = f.root().join("content/posts/docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(
+        docs.join("_index.md"),
+        r#"---
+title: "Docs"
+---
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        docs.join("2026-06-01-guide.md"),
+        r#"---
+title: "Guide"
+date: "2026-06-01"
+---
+Guide content.
+"#,
+    )
+    .unwrap();
+
+    let mut config = f.config();
+    config.collections = vec![CollectionConfig {
+        name: "posts".into(),
+        directory: "posts".into(),
+        route: "/blog/{slug}/".into(),
+        template: "post.html".into(),
+        date_ordered: true,
+        feed: true,
+    }];
+    let output = f.root().join("dist");
+
+    build(&config, &output, false).unwrap();
+
+    let section = read(&output.join("blog/docs/index.html"));
+    assert!(section.contains("CUSTOM SECTION Docs"));
+}
+
+#[test]
+fn section_prefix_collision_does_not_include_sibling_content() {
+    let f = FixtureBuilder::new("section-collision");
+    f.write_styles("body {}");
+
+    let docs = f.root().join("content/posts/docs");
+    let docs2 = f.root().join("content/posts/docs2");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::create_dir_all(&docs2).unwrap();
+    std::fs::write(
+        docs.join("_index.md"),
+        r#"---
+title: "Docs"
+---
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        docs2.join("_index.md"),
+        r#"---
+title: "Docs2"
+---
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        docs.join("2026-06-01-docs.md"),
+        r#"---
+title: "Docs Item"
+date: "2026-06-01"
+---
+Docs content.
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        docs2.join("2026-06-01-docs2.md"),
+        r#"---
+title: "Docs2 Item"
+date: "2026-06-01"
+---
+Docs2 content.
+"#,
+    )
+    .unwrap();
+
+    let mut config = f.config();
+    config.paginate_by = 2;
+    config.collections = vec![CollectionConfig {
+        name: "posts".into(),
+        directory: "posts".into(),
+        route: "/blog/{slug}/".into(),
+        template: "post.html".into(),
+        date_ordered: true,
+        feed: true,
+    }];
+    let output = f.root().join("dist");
+
+    build(&config, &output, false).unwrap();
+
+    let docs_page = read(&output.join("blog/docs/index.html"));
+    assert!(docs_page.contains("Docs Item"));
+    assert!(!docs_page.contains("Docs2 Item"));
+}
+
+#[test]
+fn custom_collection_route_drives_section_urls() {
+    let f = FixtureBuilder::new("section-route");
+    f.write_styles("body {}");
+
+    let docs = f.root().join("content/posts/docs");
+    let k8s = docs.join("k8s");
+    std::fs::create_dir_all(&k8s).unwrap();
+    std::fs::write(
+        docs.join("_index.md"),
+        r#"---
+title: "Docs"
+---
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        k8s.join("_index.md"),
+        r#"---
+title: "K8s"
+---
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        k8s.join("2026-06-01-cluster.md"),
+        r#"---
+title: "Cluster"
+date: "2026-06-01"
+---
+K8s content.
+"#,
+    )
+    .unwrap();
+
+    let mut config = f.config();
+    config.collections = vec![CollectionConfig {
+        name: "posts".into(),
+        directory: "posts".into(),
+        route: "/blog/{slug}/".into(),
+        template: "post.html".into(),
+        date_ordered: true,
+        feed: true,
+    }];
+    let output = f.root().join("dist");
+
+    build(&config, &output, false).unwrap();
+
+    assert!(output.join("blog/docs/index.html").is_file());
+    assert!(output.join("blog/docs/k8s/index.html").is_file());
+    assert!(!output.join("posts/docs/index.html").exists());
 }
 
 // --- Public assets ---
@@ -471,6 +715,7 @@ date: "2026-06-01"
         BuildMode::Full,
         Some(&mut cache),
         &artifacts,
+        true,
     )
     .unwrap();
 
@@ -493,10 +738,24 @@ date: "2026-06-01"
         BuildMode::Content,
         Some(&mut cache),
         &artifacts,
+        true,
     )
     .unwrap();
 
     let post = read(&output.join("posts/change/index.html"));
     assert!(post.contains("Updated Title"));
     assert!(!post.contains("Original Title"));
+}
+
+// --- SiteModel types are exported ---
+
+#[test]
+fn page_kind_variants_exist() {
+    let _home = PageKind::Home;
+    let _single = PageKind::Single;
+    let _section = PageKind::Section;
+    let _taxonomy_index = PageKind::TaxonomyIndex;
+    let _term = PageKind::Term;
+    let _paginate = PageKind::Paginate;
+    let _not_found = PageKind::NotFound;
 }

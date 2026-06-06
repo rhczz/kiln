@@ -78,6 +78,10 @@ mod tests {
             author: None,
             feed: FeedConfig { item_count: 20 },
             collections: vec![],
+            taxonomies: vec![],
+            paginate_by: 0,
+            paginate_path: "page".into(),
+            menus: Default::default(),
             extra: toml::Value::Table(Default::default()),
         }
     }
@@ -100,7 +104,10 @@ mod tests {
             featured: false,
             draft: false,
             tags: vec![],
+            taxonomy_terms: Default::default(),
             raw_date: chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok(),
+            headings: vec![],
+            shortcodes: vec![],
         }
     }
 
