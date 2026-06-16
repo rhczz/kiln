@@ -30,7 +30,13 @@ impl AssetManifest {
 
     pub fn save(&self, output_dir: &Path) -> anyhow::Result<()> {
         let path = output_dir.join("asset_manifest.json");
-        let json = serde_json::to_string_pretty(self)?;
+        let sorted = serde_json::json!({
+            "mappings": self
+                .mappings
+                .iter()
+                .collect::<std::collections::BTreeMap<_, _>>(),
+        });
+        let json = serde_json::to_string_pretty(&sorted)?;
         std::fs::write(path, json)?;
         Ok(())
     }
