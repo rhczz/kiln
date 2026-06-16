@@ -28,20 +28,33 @@
 ## 快速开始
 
 ```bash
+# 创建新站点
+kiln init my-site
+cd my-site
+
 # 构建站点
-kiln build --config site/site.config.toml --output dist
+kiln build --config site.config.toml --output dist
 
 # 包含草稿文章
-kiln build --config site/site.config.toml --drafts
+kiln build --config site.config.toml --drafts
 
 # 构建并输出性能分析
-kiln build --config site/site.config.toml --profile
+kiln build --config site.config.toml --profile
 
 # 仅验证配置和内容，不生成输出
-kiln check --config site/site.config.toml
+kiln check --config site.config.toml
+
+# 检查项目健康状态，并输出可执行修复建议
+kiln doctor --config site.config.toml
+
+# 清理构建产物，默认保留 .kiln 状态
+kiln clean --output dist
+
+# 仅清理 .kiln 状态
+kiln clean --output dist --cache
 
 # 启动开发服务器（自动重新构建）
-kiln serve --config site/site.config.toml --port 4173
+kiln serve --config site.config.toml --port 4173
 ```
 
 ## 项目结构
@@ -104,8 +117,11 @@ weight = 1
 
 | 命令 | 说明 |
 |------|------|
+| `kiln init <path>` | 创建可直接用内置模板构建的最小站点 |
 | `kiln build` | 构建静态站点到输出目录 |
 | `kiln check` | 验证配置和内容，不生成输出 |
+| `kiln doctor` | 检查配置、内容、模板、路由与资源，并给出修复建议 |
+| `kiln clean` | 清理构建产物或仅清理 `.kiln` 状态 |
 | `kiln serve` | 启动开发服务器，文件变更自动重新构建 |
 
 ### Build 标志
