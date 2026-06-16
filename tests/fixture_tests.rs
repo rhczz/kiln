@@ -106,6 +106,54 @@ fn file_exists(path: &Path) -> bool {
     path.exists()
 }
 
+fn build_opts(mode: BuildMode) -> BuildOptions {
+    BuildOptions {
+        include_drafts: false,
+        mode,
+        emit_report: false,
+        profile: false,
+    }
+}
+
+fn collect_output_files(root: &Path) -> Vec<PathBuf> {
+    fn visit(root: &Path, dir: &Path, files: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(dir).unwrap_or_else(|e| panic!("read_dir {:?}: {}", dir, e)) {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.is_dir() {
+                visit(root, &path, files);
+            } else {
+                files.push(path.strip_prefix(root).unwrap().to_path_buf());
+            }
+        }
+    }
+
+    let mut files = Vec::new();
+    visit(root, root, &mut files);
+    files.sort();
+    files
+}
+
+fn assert_output_dirs_match(case: &str, incremental: &Path, clean: &Path) {
+    let incremental_files = collect_output_files(incremental);
+    let clean_files = collect_output_files(clean);
+    assert_eq!(
+        incremental_files, clean_files,
+        "{case}: output file lists differ"
+    );
+
+    for relative in incremental_files {
+        let incremental_bytes = fs::read(incremental.join(&relative)).unwrap();
+        let clean_bytes = fs::read(clean.join(&relative)).unwrap();
+        assert_eq!(
+            incremental_bytes,
+            clean_bytes,
+            "{case}: output file differs: {}",
+            relative.display()
+        );
+    }
+}
+
 // --- Minimal site ---
 
 #[test]
@@ -823,6 +871,395 @@ date: "2026-06-01"
     let post = read(&output.join("posts/change/index.html"));
     assert!(post.contains("Updated Title"));
     assert!(!post.contains("Original Title"));
+}
+
+#[test]
+fn clean_and_incremental_outputs_match_for_basic_blog_changes() {
+    let f = FixtureBuilder::new("matrix-basic-blog");
+    f.write_styles("body {}");
+    f.write_post(
+        "2026-06-01-first.md",
+        r#"title: "First"
+date: "2026-06-01"
+tags: ["rust"]
+"#,
+        "First body.",
+    );
+    f.write_post(
+        "2026-06-02-second.md",
+        r#"title: "Second"
+date: "2026-06-02"
+tags: ["rust", "kiln"]
+"#,
+        "Second body.",
+    );
+    f.write_page("about.md", r#"title: "About""#, "About page.");
+
+    let mut config = f.config();
+    config.taxonomies = vec![TaxonomyConfig {
+        name: "tags".into(),
+        slug: "tags".into(),
+        template: "term.html".into(),
+    }];
+    let incremental_output = f.root().join("dist-incremental");
+    let clean_output = f.root().join("dist-clean");
+    let mut cache = BuildCache::new();
+    let artifacts = BuildArtifacts::load(&config).unwrap();
+
+    build_with_artifacts(
+        &config,
+        &incremental_output,
+        Some(&mut cache),
+        &artifacts,
+        build_opts(BuildMode::Full),
+    )
+    .unwrap();
+
+    f.write_post(
+        "2026-06-02-second.md",
+        r#"title: "Second Updated"
+date: "2026-06-02"
+tags: ["kiln"]
+"#,
+        "Second body updated.",
+    );
+    fs::remove_file(f.root().join("content/pages/about.md")).unwrap();
+
+    build_with_artifacts(
+        &config,
+        &incremental_output,
+        Some(&mut cache),
+        &artifacts,
+        build_opts(BuildMode::Content),
+    )
+    .unwrap();
+    build(&config, &clean_output, false, false).unwrap();
+
+    assert!(!incremental_output.join("about/index.html").exists());
+    assert_output_dirs_match(
+        "basic blog content/delete",
+        &incremental_output,
+        &clean_output,
+    );
+}
+
+#[test]
+fn clean_and_incremental_outputs_match_for_multi_collection_changes() {
+    let f = FixtureBuilder::new("matrix-collections");
+    f.write_styles("body {}");
+    f.write_template(
+        "note.html",
+        "NOTE {{ page.title }} {{ page.body_html | safe }}",
+    );
+    f.write_template(
+        "project.html",
+        "PROJECT {{ page.title }} {{ page.body_html | safe }}",
+    );
+    fs::create_dir_all(f.root().join("content/notes")).unwrap();
+    fs::create_dir_all(f.root().join("content/projects")).unwrap();
+    fs::write(
+        f.root().join("content/posts/2026-06-01-post.md"),
+        r#"---
+title: "Post"
+date: "2026-06-01"
+---
+Post body.
+"#,
+    )
+    .unwrap();
+    fs::write(
+        f.root().join("content/notes/2026-06-02-note.md"),
+        r#"---
+title: "Note"
+date: "2026-06-02"
+---
+Note body.
+"#,
+    )
+    .unwrap();
+    fs::write(
+        f.root().join("content/projects/kiln.md"),
+        r#"---
+title: "Kiln"
+---
+Project body.
+"#,
+    )
+    .unwrap();
+
+    let mut config = f.config();
+    config.collections = vec![
+        CollectionConfig {
+            name: "posts".into(),
+            directory: "posts".into(),
+            route: "/blog/{slug}/".into(),
+            template: "post.html".into(),
+            date_ordered: true,
+            feed: true,
+        },
+        CollectionConfig {
+            name: "notes".into(),
+            directory: "notes".into(),
+            route: "/notes/{slug}/".into(),
+            template: "note.html".into(),
+            date_ordered: true,
+            feed: true,
+        },
+        CollectionConfig {
+            name: "projects".into(),
+            directory: "projects".into(),
+            route: "/projects/{slug}/".into(),
+            template: "project.html".into(),
+            date_ordered: false,
+            feed: false,
+        },
+    ];
+    let incremental_output = f.root().join("dist-incremental");
+    let clean_output = f.root().join("dist-clean");
+    let mut cache = BuildCache::new();
+    let artifacts = BuildArtifacts::load(&config).unwrap();
+
+    build_with_artifacts(
+        &config,
+        &incremental_output,
+        Some(&mut cache),
+        &artifacts,
+        build_opts(BuildMode::Full),
+    )
+    .unwrap();
+
+    fs::write(
+        f.root().join("content/notes/2026-06-02-note.md"),
+        r#"---
+title: "Note Revised"
+date: "2026-06-02"
+---
+Note body revised.
+"#,
+    )
+    .unwrap();
+
+    build_with_artifacts(
+        &config,
+        &incremental_output,
+        Some(&mut cache),
+        &artifacts,
+        build_opts(BuildMode::Content),
+    )
+    .unwrap();
+    build(&config, &clean_output, false, false).unwrap();
+
+    assert_output_dirs_match(
+        "multi collection content",
+        &incremental_output,
+        &clean_output,
+    );
+}
+
+#[test]
+fn clean_and_incremental_outputs_match_for_taxonomy_and_pagination_changes() {
+    let f = FixtureBuilder::new("matrix-taxonomy-pagination");
+    f.write_styles("body {}");
+    f.write_template("tag_term.html", "TERM {{ term.name }}{% for page in term.pages %} {{ page.title }}{% endfor %}{% if paginator %} P{{ paginator.current_index }}{% endif %}");
+
+    for i in 1..=5 {
+        let topic = if i % 2 == 0 { "rust" } else { "kiln" };
+        f.write_post(
+            &format!("2026-06-0{}-post-{}.md", i, i),
+            &format!(
+                r#"title: "Post {}"
+date: "2026-06-0{}"
+tags: ["{}"]
+"#,
+                i, i, topic
+            ),
+            &format!("Post {} body.", i),
+        );
+    }
+
+    let mut config = f.config();
+    config.paginate_by = 2;
+    config.taxonomies = vec![TaxonomyConfig {
+        name: "tags".into(),
+        slug: "topics".into(),
+        template: "tag_term.html".into(),
+    }];
+    let incremental_output = f.root().join("dist-incremental");
+    let clean_output = f.root().join("dist-clean");
+    let mut cache = BuildCache::new();
+    let artifacts = BuildArtifacts::load(&config).unwrap();
+
+    build_with_artifacts(
+        &config,
+        &incremental_output,
+        Some(&mut cache),
+        &artifacts,
+        build_opts(BuildMode::Full),
+    )
+    .unwrap();
+
+    fs::remove_file(f.root().join("content/posts/2026-06-05-post-5.md")).unwrap();
+    f.write_post(
+        "2026-06-04-post-4.md",
+        r#"title: "Post 4 Retagged"
+date: "2026-06-04"
+tags: ["kiln"]
+"#,
+        "Post 4 body retagged.",
+    );
+
+    build_with_artifacts(
+        &config,
+        &incremental_output,
+        Some(&mut cache),
+        &artifacts,
+        build_opts(BuildMode::Content),
+    )
+    .unwrap();
+    build(&config, &clean_output, false, false).unwrap();
+
+    assert!(!incremental_output.join("posts/post-5/index.html").exists());
+    assert_output_dirs_match(
+        "taxonomy pagination content/delete",
+        &incremental_output,
+        &clean_output,
+    );
+}
+
+#[test]
+fn clean_and_incremental_outputs_match_for_public_asset_changes() {
+    let f = FixtureBuilder::new("matrix-assets");
+    f.write_styles("body {}");
+    f.write_template(
+        "home.html",
+        r#"<link rel="stylesheet" href="{{ asset_url(path="css/site.css") | safe }}"><script src="{{ asset_url(path="js/app.js") | safe }}"></script>"#,
+    );
+    f.write_public(
+        "css/site.css",
+        b".hero { background: url('../images/logo.png'); }",
+    );
+    f.write_public("images/logo.png", b"LOGO_V1");
+    f.write_public("js/app.js", b"console.log('v1');");
+    f.write_post(
+        "2026-06-01-assets.md",
+        r#"title: "Assets"
+date: "2026-06-01"
+"#,
+        "Asset body.",
+    );
+
+    let config = f.config();
+    let incremental_output = f.root().join("dist-incremental");
+    let clean_output = f.root().join("dist-clean");
+    let mut cache = BuildCache::new();
+    let artifacts = BuildArtifacts::load(&config).unwrap();
+
+    build_with_artifacts(
+        &config,
+        &incremental_output,
+        Some(&mut cache),
+        &artifacts,
+        build_opts(BuildMode::Full),
+    )
+    .unwrap();
+    let old_manifest: serde_json::Value =
+        serde_json::from_str(&read(&incremental_output.join("asset_manifest.json"))).unwrap();
+    let old_logo = old_manifest["mappings"]["images/logo.png"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    f.write_public(
+        "css/site.css",
+        b".hero { background: url('../images/logo.png'); color: red; }",
+    );
+    f.write_public("images/logo.png", b"LOGO_V2");
+    f.write_public("js/app.js", b"console.log('v2');");
+
+    build_with_artifacts(
+        &config,
+        &incremental_output,
+        Some(&mut cache),
+        &artifacts,
+        build_opts(BuildMode::Public),
+    )
+    .unwrap();
+    build(&config, &clean_output, false, false).unwrap();
+
+    let index = read(&incremental_output.join("index.html"));
+    assert!(index.contains("css/site."));
+    assert!(index.contains("js/app."));
+    assert!(
+        !incremental_output.join(&old_logo).exists(),
+        "stale fingerprinted public asset should be pruned"
+    );
+    assert_output_dirs_match("public asset change", &incremental_output, &clean_output);
+}
+
+#[test]
+fn clean_and_incremental_outputs_match_for_template_and_shortcode_changes() {
+    let f = FixtureBuilder::new("matrix-templates");
+    f.write_styles("body {}");
+    f.write_template(
+        "layout.html",
+        "<html><body>Layout v1 {{ body | safe }}</body></html>",
+    );
+    f.write_template(
+        "shortcodes/callout.html",
+        "<aside>Callout v1 {{ content }}</aside>",
+    );
+    f.write_post(
+        "2026-06-01-template.md",
+        r#"title: "Template"
+date: "2026-06-01"
+"#,
+        "Before\n{{< callout >}}inside{{< /callout >}}\nAfter",
+    );
+
+    let config = f.config();
+    let incremental_output = f.root().join("dist-incremental");
+    let clean_output = f.root().join("dist-clean");
+    let mut cache = BuildCache::new();
+    let artifacts = BuildArtifacts::load(&config).unwrap();
+
+    build_with_artifacts(
+        &config,
+        &incremental_output,
+        Some(&mut cache),
+        &artifacts,
+        build_opts(BuildMode::Full),
+    )
+    .unwrap();
+
+    f.write_template(
+        "layout.html",
+        "<html><body>Layout v2 {{ body | safe }}</body></html>",
+    );
+    f.write_template(
+        "shortcodes/callout.html",
+        "<aside>Callout v2 {{ content }}</aside>",
+    );
+    let artifacts = BuildArtifacts::load(&config).unwrap();
+    cache.clear_renders();
+
+    build_with_artifacts(
+        &config,
+        &incremental_output,
+        Some(&mut cache),
+        &artifacts,
+        build_opts(BuildMode::Content),
+    )
+    .unwrap();
+    build(&config, &clean_output, false, false).unwrap();
+
+    let post = read(&incremental_output.join("posts/template/index.html"));
+    assert!(post.contains("Layout v2"));
+    assert!(post.contains("Callout v2"));
+    assert_output_dirs_match(
+        "template and shortcode change",
+        &incremental_output,
+        &clean_output,
+    );
 }
 
 // --- SiteModel types are exported ---

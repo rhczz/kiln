@@ -184,9 +184,12 @@ pub fn build_with_artifacts(
         &mut timer,
     )?;
 
-    if matches!(opts.mode, BuildMode::Full) {
+    if matches!(opts.mode, BuildMode::Public | BuildMode::Full) {
         timer.phase("write_assets");
         artifacts.style_asset.write(output_dir)?;
+    }
+
+    if matches!(opts.mode, BuildMode::Full) {
         write_asset_headers(output_dir)?;
     }
 
