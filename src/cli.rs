@@ -330,27 +330,13 @@ fn check_optional_dir(report: &mut DoctorReport, label: &str, path: &Path, hint:
 }
 
 fn check_content_routes(report: &mut DoctorReport, config: &crate::config::SiteConfig) {
-    let mut routes: BTreeMap<String, PathBuf> = BTreeMap::new();
+    let mut all_items = Vec::new();
     let mut item_count = 0usize;
     for collection in &config.collections {
         match crate::content::load_collection(&config.paths.content, collection, false) {
             Ok(items) => {
                 item_count += items.len();
-                for item in items {
-                    if let Some(previous) =
-                        routes.insert(item.url.clone(), item.source_path.clone())
-                    {
-                        report.error(
-                            format!(
-                                "route conflict at {} between {} and {}",
-                                item.url,
-                                previous.display(),
-                                item.source_path.display()
-                            ),
-                            "change one slug or collection route",
-                        );
-                    }
-                }
+                all_items.extend(items);
             }
             Err(e) => report.error(
                 format!("failed to load collection {:?}: {}", collection.name, e),
@@ -366,6 +352,38 @@ fn check_content_routes(report: &mut DoctorReport, config: &crate::config::SiteC
     } else {
         report.ok(format!("{} publishable content item(s) found", item_count));
     }
+
+    check_model_output_collisions(report, config, all_items);
+}
+
+fn check_model_output_collisions(
+    report: &mut DoctorReport,
+    config: &crate::config::SiteConfig,
+    all_items: Vec<crate::content::ContentItem>,
+) {
+    let site_model = crate::model::build_site_model(all_items, &config.collections, config);
+    let mut outputs: BTreeMap<PathBuf, String> = BTreeMap::new();
+    for page in &site_model.pages {
+        let origin = page_origin(page);
+        if let Some(previous) = outputs.insert(page.output_path.clone(), origin.clone()) {
+            report.error(
+                format!(
+                    "output path conflict at {} between {} and {}",
+                    page.output_path.display(),
+                    previous,
+                    origin
+                ),
+                "change one slug, collection route, taxonomy slug, or section path",
+            );
+        }
+    }
+}
+
+fn page_origin(page: &crate::model::Page) -> String {
+    if let Some(source) = &page.source_path {
+        return source.display().to_string();
+    }
+    format!("generated {:?} page {}", page.kind, page.url)
 }
 
 fn check_public_assets(report: &mut DoctorReport, public_dir: &Path) {
@@ -479,10 +497,17 @@ impl DoctorReport {
 fn clean(output: &Path, cache_only: bool) -> anyhow::Result<()> {
     let output = absolutize(output)?;
     ensure_safe_clean_target(&output)?;
+    let manifest_path = output.join(".kiln").join("manifest.json");
 
     if cache_only {
         let cache_dir = output.join(".kiln");
         if cache_dir.exists() {
+            if !manifest_path.is_file() {
+                anyhow::bail!(
+                    "Refusing to clean cache state in {} because it does not look like a kiln output directory (missing .kiln/manifest.json)",
+                    output.display()
+                );
+            }
             std::fs::remove_dir_all(&cache_dir)?;
             eprintln!("Removed kiln cache state: {}", cache_dir.display());
         } else {
@@ -502,7 +527,6 @@ fn clean(output: &Path, cache_only: bool) -> anyhow::Result<()> {
         );
     }
 
-    let manifest_path = output.join(".kiln").join("manifest.json");
     if !manifest_path.is_file() {
         anyhow::bail!(
             "Refusing to clean {} because it does not look like a kiln output directory (missing .kiln/manifest.json)",
@@ -527,6 +551,7 @@ fn clean(output: &Path, cache_only: bool) -> anyhow::Result<()> {
     candidates.insert(PathBuf::from("sitemap.xml"));
     candidates.insert(PathBuf::from("sitemap-pages.xml"));
     candidates.insert(PathBuf::from("sitemap-posts.xml"));
+    candidates.insert(PathBuf::from("_headers"));
 
     let mut removed_files = 0usize;
     for relative in candidates {

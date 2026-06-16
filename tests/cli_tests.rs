@@ -73,6 +73,11 @@ Profile body.
         )
         .unwrap();
         fs::write(self.root.join("dist/rss.xml"), "<rss></rss>").unwrap();
+        fs::write(
+            self.root.join("dist/_headers"),
+            "/assets/*\n  Cache-Control: public, max-age=31536000, immutable\n",
+        )
+        .unwrap();
         fs::create_dir_all(self.root.join("dist/css")).unwrap();
         fs::write(self.root.join("dist/css/app.abc123.css"), "body {}\n").unwrap();
         fs::write(self.root.join("dist/notes.txt"), "generated asset\n").unwrap();
@@ -164,6 +169,52 @@ title: "Page About"
 ---
 
 Page body.
+"#,
+        )
+        .unwrap();
+    }
+
+    fn write_generated_route_conflict_site(&self) {
+        fs::create_dir_all(self.root.join("content/pages")).unwrap();
+        fs::write(self.root.join("styles.css"), "body {}\n").unwrap();
+        fs::write(
+            self.root.join("site.config.toml"),
+            r#"[site]
+title = "Generated Route Conflict"
+description = "Generated route conflict fixture"
+base_url = "https://generated-conflict.test"
+
+[paths]
+content = "content"
+templates = "templates"
+public = "public"
+styles = "styles.css"
+
+[[taxonomies]]
+name = "tags"
+slug = "tags"
+"#,
+        )
+        .unwrap();
+        fs::write(
+            self.root.join("content/posts/2026-06-01-tagged.md"),
+            r#"---
+title: "Tagged"
+date: "2026-06-01"
+tags: ["kiln"]
+---
+
+Tagged post.
+"#,
+        )
+        .unwrap();
+        fs::write(
+            self.root.join("content/pages/tags.md"),
+            r#"---
+title: "Tags Page"
+---
+
+This page collides with the generated taxonomy index.
 "#,
         )
         .unwrap();
@@ -301,6 +352,7 @@ fn clean_removes_generated_output_but_keeps_cache_by_default() {
     assert!(!dist.join("index.html").exists());
     assert!(!dist.join("posts").exists());
     assert!(!dist.join("rss.xml").exists());
+    assert!(!dist.join("_headers").exists());
     assert!(!dist.join("css/app.abc123.css").exists());
     assert!(!dist.join("css").exists());
     assert!(!dist.join("notes.txt").exists());
@@ -331,6 +383,32 @@ fn clean_cache_removes_only_kiln_state() {
     assert!(dist.join("index.html").is_file());
     assert!(dist.join("posts/hello/index.html").is_file());
     assert!(!dist.join(".kiln").exists());
+}
+
+#[test]
+fn clean_cache_refuses_non_kiln_state_directory() {
+    let fixture = CliFixture::new("clean-cache-refusal");
+    let output_dir = fixture.root().join("other-output");
+    fs::create_dir_all(output_dir.join(".kiln")).unwrap();
+    fs::write(output_dir.join(".kiln/state.json"), "{}").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_kiln"))
+        .arg("clean")
+        .arg("--output")
+        .arg(&output_dir)
+        .arg("--cache")
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "kiln clean --cache should refuse non-kiln state\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("missing .kiln/manifest.json"), "{stderr}");
+    assert!(output_dir.join(".kiln/state.json").is_file());
 }
 
 #[test]
@@ -489,9 +567,42 @@ fn doctor_fails_when_collections_generate_the_same_route() {
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("route conflict at /about/"), "{stderr}");
     assert!(
-        stderr.contains("change one slug or collection route"),
+        stderr.contains("output path conflict at about/index.html"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("change one slug, collection route, taxonomy slug, or section path"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn doctor_fails_when_content_collides_with_generated_page() {
+    let fixture = CliFixture::new("doctor-generated-route-conflict");
+    fixture.write_generated_route_conflict_site();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_kiln"))
+        .arg("doctor")
+        .arg("--config")
+        .arg(fixture.root().join("site.config.toml"))
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "kiln doctor should fail for content/generated output conflicts\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("output path conflict at tags/index.html"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("change one slug, collection route, taxonomy slug, or section path"),
         "{stderr}"
     );
 }
