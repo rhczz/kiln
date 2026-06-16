@@ -28,20 +28,33 @@ Built with Rust. Zero runtime dependencies. Single binary.
 ## Quick Start
 
 ```bash
+# Create a new site
+kiln init my-site
+cd my-site
+
 # Build your site
-kiln build --config site/site.config.toml --output dist
+kiln build --config site.config.toml --output dist
 
 # Include draft posts
-kiln build --config site/site.config.toml --drafts
+kiln build --config site.config.toml --drafts
 
 # Build with profiling
-kiln build --config site/site.config.toml --profile
+kiln build --config site.config.toml --profile
 
 # Validate config and content without writing output
-kiln check --config site/site.config.toml
+kiln check --config site.config.toml
+
+# Inspect project health with actionable warnings and hints
+kiln doctor --config site.config.toml
+
+# Remove generated output, keeping .kiln state by default
+kiln clean --output dist
+
+# Remove only .kiln state
+kiln clean --output dist --cache
 
 # Start dev server with auto-rebuild
-kiln serve --config site/site.config.toml --port 4173
+kiln serve --config site.config.toml --port 4173
 ```
 
 ## Project Structure
@@ -104,8 +117,11 @@ weight = 1
 
 | Command | Description |
 |---------|-------------|
+| `kiln init <path>` | Create a minimal site that builds with the built-in templates |
 | `kiln build` | Build the static site to output directory |
 | `kiln check` | Validate config and content without building |
+| `kiln doctor` | Inspect config, content, templates, routes, and assets with hints |
+| `kiln clean` | Remove generated output or only `.kiln` cache state |
 | `kiln serve` | Start dev server with auto-rebuild on file changes |
 
 ### Build Flags
