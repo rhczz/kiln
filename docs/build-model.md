@@ -257,4 +257,26 @@ kiln build --config site/site.config.toml --output dist
 kiln build --config site/site.config.toml --output dist --profile
 ```
 
+机器可读 profile 可以用：
+
+```bash
+kiln build --config site/site.config.toml --output dist --profile-json
+```
+
+JSON profile 使用 `schema_version: 1`，包含：
+
+- `phases`: `prepare_output`、`copy_public_assets`、`load_content_markdown`、`render_pages`、`write_assets`、`generate_feeds_sitemap` 等阶段耗时
+- `cache`: 当前进程内 render/content/public cache hit、miss 和 hit rate
+- `parallel`: render worker 数、render wall time、累积 per-page CPU time 和估算 speedup
+- `rendering`: 实际渲染页数、平均/最大单页耗时和最慢页面列表
+
+大站 benchmark fixture 位于 `tests/bench_gen.rs`，包含 100、500、1000 和 5000 篇文章的 ignored benchmark：
+
+```bash
+cargo test --test bench_gen bench_1000_posts -- --ignored --nocapture
+cargo test --test bench_gen bench_5000_posts -- --ignored --nocapture
+```
+
+当前基线记录在 `docs/performance-baseline.md`。这些 benchmark 不是硬性 CI 阈值，主要用于本机或 release 前比较趋势。
+
 需要注意的是，`--profile` 展示的是本次命令进程内的 cache 活动，不表示上一次 `kiln build` 的 HTML 被复用了。

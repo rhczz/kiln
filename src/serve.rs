@@ -34,6 +34,7 @@ pub fn start(
             mode: crate::site::BuildMode::Full,
             emit_report: true,
             profile: false,
+            profile_json: false,
         },
     )?;
 
@@ -134,6 +135,7 @@ pub fn start(
                                         mode: crate::site::BuildMode::Content,
                                         emit_report: true,
                                         profile: false,
+                                        profile_json: false,
                                     },
                                 ),
                                 RebuildMode::Public => crate::site::build_public_incremental(
@@ -176,6 +178,7 @@ pub fn start(
                                             mode: crate::site::BuildMode::Full,
                                             emit_report: true,
                                             profile: false,
+                                            profile_json: false,
                                         },
                                     )
                                 }

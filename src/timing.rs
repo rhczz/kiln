@@ -1,6 +1,52 @@
+use serde::Serialize;
 use std::time::Instant;
 
-#[allow(dead_code)]
+#[derive(Serialize)]
+pub struct ProfileJson<'a> {
+    schema_version: u8,
+    total_ms: u128,
+    phases: Vec<PhaseTimingJson<'a>>,
+    cache: CacheProfileJson,
+    parallel: ParallelProfileJson,
+    rendering: RenderingProfileJson<'a>,
+}
+
+#[derive(Serialize)]
+struct PhaseTimingJson<'a> {
+    name: &'a str,
+    elapsed_ms: u128,
+}
+
+#[derive(Serialize)]
+struct CacheProfileJson {
+    hits: usize,
+    misses: usize,
+    hit_rate: Option<f64>,
+}
+
+#[derive(Serialize)]
+struct ParallelProfileJson {
+    threads: usize,
+    render_wall_time_ms: u128,
+    total_cpu_time_ms: u128,
+    speedup: Option<f64>,
+}
+
+#[derive(Serialize)]
+struct RenderingProfileJson<'a> {
+    page_renders: usize,
+    avg_page_ms: Option<u128>,
+    max_page_ms: Option<u128>,
+    slowest_pages: Vec<PageTimingJson<'a>>,
+}
+
+#[derive(Serialize)]
+struct PageTimingJson<'a> {
+    url: &'a str,
+    template: &'a str,
+    elapsed_ms: u128,
+}
+
 pub struct ProfileData {
     cache_hits: usize,
     cache_misses: usize,
@@ -96,17 +142,29 @@ impl BuildTimer {
 
     #[allow(dead_code)]
     pub fn end_page(&mut self, rendered: bool) {
-        if let Some(p) = &mut self.profile {
-            if let Some(state) = p.current_page.take() {
-                if rendered {
-                    p.render_count += 1;
-                    p.page_timings.push(PageTiming {
-                        url: state.url,
-                        template: state.template,
-                        elapsed_ms: state.start.elapsed().as_millis(),
-                    });
-                }
+        let state = self
+            .profile
+            .as_mut()
+            .and_then(|profile| profile.current_page.take());
+        if let Some(state) = state {
+            if rendered {
+                self.record_page_render(
+                    &state.url,
+                    &state.template,
+                    state.start.elapsed().as_millis(),
+                );
             }
+        }
+    }
+
+    pub fn record_page_render(&mut self, url: &str, template: &str, elapsed_ms: u128) {
+        if let Some(p) = &mut self.profile {
+            p.render_count += 1;
+            p.page_timings.push(PageTiming {
+                url: url.to_string(),
+                template: template.to_string(),
+                elapsed_ms,
+            });
         }
     }
 
@@ -212,6 +270,73 @@ impl BuildTimer {
 
         eprintln!("\n  Total: {}ms", total);
     }
+
+    pub fn profile_json(&self) -> Option<String> {
+        let profile = self.profile_json_data()?;
+        serde_json::to_string_pretty(&profile).ok()
+    }
+
+    fn profile_json_data(&self) -> Option<ProfileJson<'_>> {
+        let p = self.profile.as_ref()?;
+        let total_cache = p.cache_hits + p.cache_misses;
+        let hit_rate = if total_cache > 0 {
+            Some((p.cache_hits as f64 / total_cache as f64) * 100.0)
+        } else {
+            None
+        };
+        let total_cpu_time_ms: u128 = p.page_timings.iter().map(|t| t.elapsed_ms).sum();
+        let speedup = if p.render_wall_time_ms > 0 && total_cpu_time_ms > 0 {
+            Some(total_cpu_time_ms as f64 / p.render_wall_time_ms as f64)
+        } else {
+            None
+        };
+        let avg_page_ms = if p.page_timings.is_empty() {
+            None
+        } else {
+            Some(total_cpu_time_ms / p.page_timings.len() as u128)
+        };
+        let max_page_ms = p.page_timings.iter().map(|t| t.elapsed_ms).max();
+        let mut slowest_pages: Vec<&PageTiming> = p.page_timings.iter().collect();
+        slowest_pages.sort_by_key(|t| std::cmp::Reverse(t.elapsed_ms));
+
+        Some(ProfileJson {
+            schema_version: 1,
+            total_ms: self.start.elapsed().as_millis(),
+            phases: self
+                .phases
+                .iter()
+                .map(|phase| PhaseTimingJson {
+                    name: &phase.name,
+                    elapsed_ms: phase.elapsed_ms,
+                })
+                .collect(),
+            cache: CacheProfileJson {
+                hits: p.cache_hits,
+                misses: p.cache_misses,
+                hit_rate,
+            },
+            parallel: ParallelProfileJson {
+                threads: p.parallel_threads,
+                render_wall_time_ms: p.render_wall_time_ms,
+                total_cpu_time_ms,
+                speedup,
+            },
+            rendering: RenderingProfileJson {
+                page_renders: p.render_count,
+                avg_page_ms,
+                max_page_ms,
+                slowest_pages: slowest_pages
+                    .into_iter()
+                    .take(5)
+                    .map(|timing| PageTimingJson {
+                        url: &timing.url,
+                        template: &timing.template,
+                        elapsed_ms: timing.elapsed_ms,
+                    })
+                    .collect(),
+            },
+        })
+    }
 }
 
 #[cfg(test)]
@@ -282,5 +407,30 @@ mod tests {
         timer.start_page("/test/", "post.html");
         timer.end_page(true);
         assert!(!timer.is_profiling());
+    }
+
+    #[test]
+    fn profile_json_contains_stage_cache_render_and_parallel_metrics() {
+        let mut timer = BuildTimer::with_profile();
+        timer.phase("load_content");
+        timer.finish();
+        timer.set_cache_stats(3, 7);
+        timer.set_parallel_stats(4, 12);
+        timer.record_page_render("/post/", "post.html", 5);
+
+        let json = timer.profile_json().expect("profile JSON should exist");
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["cache"]["hits"], 3);
+        assert_eq!(value["cache"]["misses"], 7);
+        assert_eq!(value["rendering"]["page_renders"], 1);
+        assert_eq!(value["rendering"]["slowest_pages"][0]["url"], "/post/");
+        assert_eq!(value["parallel"]["threads"], 4);
+        assert!(value["phases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|phase| phase["name"] == "load_content"));
     }
 }

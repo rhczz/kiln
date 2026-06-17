@@ -36,6 +36,9 @@ pub enum Command {
         /// Emit detailed build profile with cache/render metrics
         #[arg(long)]
         profile: bool,
+        /// Emit machine-readable build profile JSON
+        #[arg(long, conflicts_with = "profile")]
+        profile_json: bool,
     },
     /// Validate site config and content without building
     Check {
@@ -88,9 +91,28 @@ pub fn run() -> anyhow::Result<()> {
             output,
             drafts,
             profile,
+            profile_json,
         } => {
             let (site_config, _base_dir) = crate::config::SiteConfig::load(&config)?;
-            crate::site::build(&site_config, &output, drafts, profile)?;
+            if profile_json {
+                let artifacts = crate::site::BuildArtifacts::load(&site_config)?;
+                let mut cache = crate::BuildCache::new();
+                crate::site::build_with_artifacts(
+                    &site_config,
+                    &output,
+                    Some(&mut cache),
+                    &artifacts,
+                    crate::site::BuildOptions {
+                        include_drafts: drafts,
+                        mode: crate::site::BuildMode::Full,
+                        emit_report: false,
+                        profile,
+                        profile_json: true,
+                    },
+                )?;
+            } else {
+                crate::site::build(&site_config, &output, drafts, profile)?;
+            }
         }
         Command::Check { config } => {
             let (site_config, _base_dir) = crate::config::SiteConfig::load(&config)?;
@@ -108,6 +130,7 @@ pub fn run() -> anyhow::Result<()> {
                     mode: crate::site::BuildMode::Full,
                     emit_report: false,
                     profile: false,
+                    profile_json: false,
                 },
             )?;
             eprintln!("Check passed.");
@@ -436,6 +459,7 @@ fn run_doctor_build(report: &mut DoctorReport, config: &crate::config::SiteConfi
             mode: crate::site::BuildMode::Full,
             emit_report: false,
             profile: false,
+            profile_json: false,
         },
     ) {
         Ok(_) => report.ok("dry build completed without writing dist"),
