@@ -1547,6 +1547,81 @@ date: "2026-06-01"
     );
 }
 
+#[test]
+fn render_failure_stops_write_at_failing_page_index() {
+    // A render failure at a lower page index must stop the write loop before any
+    // higher-indexed page is written or cached. Before the fix, failed renders
+    // were sorted to usize::MAX, so later pages got written and cached even
+    // though the build was reported as failed.
+    let f = FixtureBuilder::new("render-failure-order");
+    f.write_styles("body {}");
+
+    // The "bad" collection comes first in config, so its pages get the lower
+    // indices in the site model. Its template references an unknown filter,
+    // which Tera accepts at parse time but fails at render time.
+    fs::create_dir_all(f.root().join("content/bad")).unwrap();
+    fs::create_dir_all(f.root().join("content/good")).unwrap();
+    fs::write(
+        f.root().join("content/bad/broken.md"),
+        "---\ntitle: \"Broken\"\ndate: \"2026-06-01\"\n---\nBad body.\n",
+    )
+    .unwrap();
+    fs::write(
+        f.root().join("content/good/ok.md"),
+        "---\ntitle: \"Ok\"\ndate: \"2026-06-01\"\n---\nGood body.\n",
+    )
+    .unwrap();
+    f.write_template("bad.html", "{{ page.title | kiln_unknown_filter }}");
+    f.write_template("good.html", "{{ page.title }}");
+
+    let mut config = f.config();
+    config.collections = vec![
+        CollectionConfig {
+            name: "bad".into(),
+            directory: "bad".into(),
+            route: "/bad/{slug}/".into(),
+            template: "bad.html".into(),
+            date_ordered: true,
+            feed: false,
+        },
+        CollectionConfig {
+            name: "good".into(),
+            directory: "good".into(),
+            route: "/good/{slug}/".into(),
+            template: "good.html".into(),
+            date_ordered: true,
+            feed: false,
+        },
+    ];
+    f.write_template(
+        "home.html",
+        "home{% for item in pages %}{{ item.url }}{% endfor %}",
+    );
+    f.write_template("404.html", "not found");
+
+    let output = f.root().join("dist");
+    let artifacts = BuildArtifacts::load(&config).unwrap();
+
+    let result = build_with_artifacts(
+        &config,
+        &output,
+        None,
+        &artifacts,
+        build_opts(BuildMode::Full),
+    );
+    assert!(
+        result.is_err(),
+        "build should fail because the bad collection template cannot render"
+    );
+
+    // The lower-indexed failing page is encountered first, so the write loop
+    // must stop before the higher-indexed good page is written.
+    assert!(
+        !output.join("good/ok/index.html").exists(),
+        "pages after the failing page must not be written when the build fails"
+    );
+}
+
 // --- SiteModel types are exported ---
 
 #[test]

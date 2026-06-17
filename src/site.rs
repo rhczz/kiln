@@ -340,6 +340,13 @@ fn render_model_pages(
         elapsed_ms: u128,
     }
 
+    /// Carries the page index alongside the render outcome so failed renders
+    /// keep their position when results are sorted back into page order.
+    struct RenderResult {
+        index: usize,
+        result: anyhow::Result<RenderedPage>,
+    }
+
     let mut cached_results: Vec<(usize, String)> = Vec::new();
     let mut tasks: Vec<PageTask> = Vec::new();
 
@@ -405,7 +412,7 @@ fn render_model_pages(
         .worker_threads(worker_count)
         .build()?;
 
-    let mut results: Vec<anyhow::Result<RenderedPage>> = rt.block_on(async {
+    let mut results: Vec<RenderResult> = rt.block_on(async {
         let mut handles = Vec::with_capacity(task_chunks.len());
 
         for chunk in task_chunks.into_iter().filter(|chunk| !chunk.is_empty()) {
@@ -422,11 +429,20 @@ fn render_model_pages(
                 let mut tera = tera::Tera::default();
                 for (name, source) in templates.iter() {
                     if let Err(e) = tera.add_raw_template(name, source) {
-                        return vec![Err(anyhow::anyhow!(
-                            "Failed to add template {}: {}",
-                            name,
-                            e
-                        ))];
+                        // The template error fails every page this worker would
+                        // render; emit one indexed error per task so each keeps
+                        // its own page position when sorted.
+                        return chunk
+                            .into_iter()
+                            .map(|task| RenderResult {
+                                index: task.index,
+                                result: Err(anyhow::anyhow!(
+                                    "Failed to add template {}: {}",
+                                    name,
+                                    e
+                                )),
+                            })
+                            .collect();
                     }
                 }
                 let asset_mappings: std::sync::Arc<
@@ -465,17 +481,25 @@ fn render_model_pages(
                             template,
                             elapsed_ms: start.elapsed().as_millis(),
                         });
-                    rendered.push(result);
+                    rendered.push(RenderResult {
+                        index: task.index,
+                        result,
+                    });
                 }
                 rendered
             }));
         }
 
-        let mut results: Vec<anyhow::Result<RenderedPage>> = Vec::new();
+        let mut results: Vec<RenderResult> = Vec::new();
         for handle in handles {
             match handle.await {
                 Ok(worker_results) => results.extend(worker_results),
-                Err(e) => results.push(Err(anyhow::anyhow!("task panicked: {}", e))),
+                Err(e) => results.push(RenderResult {
+                    // A panicked worker has no single page index; sort it last so
+                    // it never lets later pages get written ahead of a real failure.
+                    index: usize::MAX,
+                    result: Err(anyhow::anyhow!("task panicked: {}", e)),
+                }),
             }
         }
         results
@@ -483,13 +507,13 @@ fn render_model_pages(
 
     let wall_time = parallel_start.elapsed().as_millis();
     timer.set_parallel_stats(worker_count, wall_time);
-    results.sort_by_key(|result| result.as_ref().map(|page| page.index).unwrap_or(usize::MAX));
+    results.sort_by_key(|result| result.index);
 
     // Phase 4: write results in order, update cache
     results
         .into_iter()
-        .try_for_each(|result| -> anyhow::Result<()> {
-            let rendered = result?;
+        .try_for_each(|render_result| -> anyhow::Result<()> {
+            let rendered = render_result.result?;
             let page = &site_model.pages[rendered.index];
             let output_path = env.output_dir.join(&page.output_path);
             write_page_if_changed(&output_path, &rendered.html)?;
