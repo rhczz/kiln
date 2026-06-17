@@ -41,6 +41,9 @@ kiln build --config site.config.toml --drafts
 # Build with profiling
 kiln build --config site.config.toml --profile
 
+# Build with machine-readable profiling
+kiln build --config site.config.toml --profile-json
+
 # Validate config and content without writing output
 kiln check --config site.config.toml
 
@@ -132,6 +135,7 @@ weight = 1
 | `--output <dir>` | Output directory (default: `dist`) |
 | `--drafts` | Include draft posts in the build |
 | `--profile` | Emit detailed build report with cache and render metrics |
+| `--profile-json` | Emit machine-readable profile JSON for automation and baselines |
 
 ## Build from Source
 

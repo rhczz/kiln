@@ -112,6 +112,7 @@ fn build_opts(mode: BuildMode) -> BuildOptions {
         mode,
         emit_report: false,
         profile: false,
+        profile_json: false,
     }
 }
 
@@ -841,6 +842,7 @@ date: "2026-06-01"
             mode: BuildMode::Full,
             emit_report: true,
             profile: false,
+            profile_json: false,
         },
     )
     .unwrap();
@@ -867,6 +869,7 @@ date: "2026-06-01"
             mode: BuildMode::Public,
             emit_report: true,
             profile: false,
+            profile_json: false,
         },
     )
     .unwrap();
@@ -1118,6 +1121,7 @@ date: "2026-06-01"
             mode: BuildMode::Full,
             emit_report: true,
             profile: false,
+            profile_json: false,
         },
     )
     .unwrap();
@@ -1144,6 +1148,7 @@ date: "2026-06-01"
             mode: BuildMode::Content,
             emit_report: true,
             profile: false,
+            profile_json: false,
         },
     )
     .unwrap();
