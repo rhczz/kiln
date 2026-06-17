@@ -175,6 +175,96 @@ fn minimal_site_builds_homepage_and_feeds() {
     assert!(index.contains(r#"href="/assets/styles."#));
 }
 
+#[test]
+fn build_fails_when_collections_generate_same_url() {
+    let f = FixtureBuilder::new("collection-url-conflict");
+    fs::create_dir_all(f.root().join("content/notes")).unwrap();
+    f.write_styles("body {}");
+    f.write_post(
+        "about.md",
+        r#"title: "About Post"
+date: "2026-06-01"
+slug: "about""#,
+        "Post body",
+    );
+    fs::write(
+        f.root().join("content/notes/about.md"),
+        "---\ntitle: \"About Note\"\nslug: \"about\"\n---\nNote body",
+    )
+    .unwrap();
+
+    let mut config = f.config();
+    config.collections = vec![
+        CollectionConfig {
+            name: "posts".into(),
+            directory: "posts".into(),
+            route: "/{slug}/".into(),
+            template: "post.html".into(),
+            date_ordered: true,
+            feed: false,
+        },
+        CollectionConfig {
+            name: "notes".into(),
+            directory: "notes".into(),
+            route: "/{slug}/".into(),
+            template: "page.html".into(),
+            date_ordered: false,
+            feed: false,
+        },
+    ];
+
+    let err = build(&config, &f.root().join("dist"), false, false).unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("output path conflict at about/index.html"));
+    assert!(err.to_string().contains("content/posts/about.md"));
+    assert!(err.to_string().contains("content/notes/about.md"));
+}
+
+#[test]
+fn build_fails_when_content_url_collides_with_taxonomy_index() {
+    let f = FixtureBuilder::new("taxonomy-url-conflict");
+    f.write_styles("body {}");
+    f.write_page(
+        "tags.md",
+        r#"title: "Tags"
+slug: "tags""#,
+        "This page collides with the generated taxonomy index.",
+    );
+
+    let config = f.config();
+    let err = build(&config, &f.root().join("dist"), false, false).unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("output path conflict at tags/index.html"));
+    assert!(err.to_string().contains("content/pages/tags.md"));
+    assert!(err
+        .to_string()
+        .contains("generated TaxonomyIndex page /tags/"));
+}
+
+#[test]
+fn build_fails_when_manual_config_taxonomy_slug_conflicts_with_collection_route() {
+    let f = FixtureBuilder::new("manual-taxonomy-route-conflict");
+    f.write_styles("body {}");
+
+    let mut config = f.config();
+    config.collections = vec![CollectionConfig {
+        name: "articles".into(),
+        directory: "posts".into(),
+        route: "/tags/{slug}/".into(),
+        template: "post.html".into(),
+        date_ordered: false,
+        feed: false,
+    }];
+
+    let err = build(&config, &f.root().join("dist"), false, false).unwrap_err();
+    assert!(err.to_string().contains("taxonomy slug \"tags\""));
+    assert!(err
+        .to_string()
+        .contains("conflicts with collection \"articles\" route \"/tags/{slug}/\""));
+}
+
 // --- Single post ---
 
 #[test]

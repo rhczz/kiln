@@ -87,7 +87,8 @@ pub fn build_with_artifacts(
     artifacts: &BuildArtifacts,
     opts: BuildOptions,
 ) -> anyhow::Result<()> {
-    let collections = effective_collections(config);
+    config.validate_structure()?;
+    let collections = site_config::effective_collections(config);
     let mut timer = if opts.profile {
         BuildTimer::with_profile()
     } else {
@@ -166,6 +167,7 @@ pub fn build_with_artifacts(
 
     timer.phase("render_pages");
     let site_model = model::build_site_model(all_items, &collections, config);
+    model::validate_unique_page_outputs(&site_model)?;
     let mut current_page_outputs: HashSet<PathBuf> = HashSet::new();
     let render_env = RenderEnv {
         engine: &artifacts.engine,
@@ -270,14 +272,6 @@ pub fn build_with_artifacts(
     }
 
     Ok(())
-}
-
-fn effective_collections(config: &SiteConfig) -> Vec<CollectionConfig> {
-    if config.collections.is_empty() {
-        site_config::default_collections()
-    } else {
-        config.collections.clone()
-    }
 }
 
 struct RenderEnv<'a> {
