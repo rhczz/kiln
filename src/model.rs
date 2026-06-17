@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use crate::config::{CollectionConfig, SiteConfig};
@@ -149,15 +149,7 @@ pub fn build_site_model(
     }
 
     // Taxonomies
-    let taxonomy_configs = if config.taxonomies.is_empty() {
-        vec![crate::config::TaxonomyConfig {
-            name: "tags".into(),
-            slug: "tags".into(),
-            template: "term.html".into(),
-        }]
-    } else {
-        config.taxonomies.clone()
-    };
+    let taxonomy_configs = crate::config::effective_taxonomies(config);
 
     let taxonomies = build_taxonomies(&all_items, &taxonomy_configs);
     let mut taxonomy_list: Vec<&Taxonomy> = taxonomies.values().collect();
@@ -248,6 +240,29 @@ pub fn build_site_model(
         taxonomies,
         all_items,
     }
+}
+
+pub fn validate_unique_page_outputs(site_model: &SiteModel) -> anyhow::Result<()> {
+    let mut outputs: BTreeMap<PathBuf, String> = BTreeMap::new();
+    for page in &site_model.pages {
+        let origin = page_origin(page);
+        if let Some(previous) = outputs.insert(page.output_path.clone(), origin.clone()) {
+            anyhow::bail!(
+                "output path conflict at {} between {} and {}; change one slug, collection route, taxonomy slug, or section path",
+                page.output_path.display(),
+                previous,
+                origin
+            );
+        }
+    }
+    Ok(())
+}
+
+pub fn page_origin(page: &Page) -> String {
+    if let Some(source) = &page.source_path {
+        return source.display().to_string();
+    }
+    format!("generated {:?} page {}", page.kind, page.url)
 }
 
 fn build_sections(

@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
@@ -362,28 +362,12 @@ fn check_model_output_collisions(
     all_items: Vec<crate::content::ContentItem>,
 ) {
     let site_model = crate::model::build_site_model(all_items, &config.collections, config);
-    let mut outputs: BTreeMap<PathBuf, String> = BTreeMap::new();
-    for page in &site_model.pages {
-        let origin = page_origin(page);
-        if let Some(previous) = outputs.insert(page.output_path.clone(), origin.clone()) {
-            report.error(
-                format!(
-                    "output path conflict at {} between {} and {}",
-                    page.output_path.display(),
-                    previous,
-                    origin
-                ),
-                "change one slug, collection route, taxonomy slug, or section path",
-            );
-        }
+    if let Err(err) = crate::model::validate_unique_page_outputs(&site_model) {
+        report.error(
+            err.to_string(),
+            "change one slug, collection route, taxonomy slug, or section path",
+        );
     }
-}
-
-fn page_origin(page: &crate::model::Page) -> String {
-    if let Some(source) = &page.source_path {
-        return source.display().to_string();
-    }
-    format!("generated {:?} page {}", page.kind, page.url)
 }
 
 fn check_public_assets(report: &mut DoctorReport, public_dir: &Path) {

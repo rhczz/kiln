@@ -73,6 +73,26 @@ styles = "assets/main.css"
 
 默认提供两个集合：`posts`（日期排序，feed 开启）和 `pages`（无日期，无 feed）。如果用户指定了任何 collection，默认值会被完全替换。
 
+默认集合等价于：
+
+```toml
+[[collections]]
+name = "posts"
+directory = "posts"
+route = "/posts/{slug}/"
+template = "post.html"
+date_ordered = true
+feed = true
+
+[[collections]]
+name = "pages"
+directory = "pages"
+route = "/{slug}/"
+template = "page.html"
+date_ordered = false
+feed = false
+```
+
 | 字段 | 类型 | 必填 | 默认值 | 说明 |
 |---|---|---|---|---|
 | `name` | string | 是 | — | 集合名称，用于模板选择和 URL 生成 |
@@ -98,9 +118,42 @@ route = "/{slug}/"
 
 **约束**：
 - `name` 不能重复
+- `name` 必须是单个非空 slug/path segment，不能含 `/`、`\`、`..`，不能以 `.` 开头，不能有首尾空白
 - `directory` 不能重复
+- `directory` 必须是 content-relative 路径（不能绝对、不能含 `..`）
 - `route` 不能含 `..`
+- `route` 必须是规范化 URL path：以 `/` 开头和结尾、包含 `{slug}`、不能含 `//` 或 `\`
 - `date_ordered = true` 时，frontmatter 中的 `date` 字段必填
+- build 会检测最终输出路径冲突；如果两个 collection 生成同一个 URL，会失败并报告两个来源文件
+
+## `[[taxonomies]]` — 可选
+
+默认 taxonomy 为 `tags`，slug 也是 `tags`，term 模板为 `term.html`。如果用户指定了任何 taxonomy，默认值会被完全替换。
+
+```toml
+[[taxonomies]]
+name = "tags"
+slug = "tags"
+template = "term.html"
+
+[[taxonomies]]
+name = "categories"
+slug = "categories"
+template = "term.html"
+```
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+|---|---|---|---|---|
+| `name` | string | 是 | — | frontmatter 字段名，例如 `tags` 或 `categories` |
+| `slug` | string | 否 | `name` | taxonomy index URL path segment，例如 `/tags/` |
+| `template` | string | 否 | `"term.html"` | term 页面模板文件名 |
+
+**约束**：
+- `name` 不能重复
+- `slug` 不能重复
+- `name` 和 `slug` 都必须是单个非空 slug/path segment，不能含 `/`、`\`、`..`，不能以 `.` 开头，不能有首尾空白
+- `slug` 不能和 collection route 的静态命名空间冲突；例如 taxonomy slug `tags` 不能与 collection route `/tags/{slug}/` 同时存在
+- build 会检测 taxonomy index、term 页面、section 页面和 content 页面之间的最终输出路径冲突；例如 `/tags/` 页面和默认 tags taxonomy index 冲突时会失败
 
 ## 自定义表（theme 透传）
 
