@@ -6,132 +6,68 @@ A lean static site compiler that bakes Markdown into HTML.
 
 Built with Rust. Zero runtime dependencies. Single binary.
 
-## Features
-
-- Markdown to HTML with syntax highlighting, tables, task lists (comrak)
-- TOML frontmatter for posts and pages
-- Tera templating engine with built-in default templates
-- Template dependency tracking for precise cache invalidation
-- Collections with custom routes and templates
-- Taxonomies (tags, categories, or custom groups) with dedicated templates
-- Paginated archives and section pages
-- RSS feed and sitemap generation
-- Built-in dev server with live reload on file changes
-- Asset fingerprinting with CSS url() rewriting and `asset_url()` Tera function
-- Parallel page rendering (tokio) for faster builds
-- Incremental builds with content, template, and asset-aware caching
-- Content hashing for cache busting
-- Draft support
-- Build profiling (`--profile`) with cache hit rate, per-page timing, and parallel rendering stats
-- Structured diagnostics with colored terminal output
-
 ## Quick Start
 
 ```bash
-# Create a new site
+# Create a site
 kiln init my-site
 cd my-site
 
-# Build your site
+# Build static output
 kiln build --config site.config.toml --output dist
 
-# Include draft posts
-kiln build --config site.config.toml --drafts
-
-# Build with profiling
-kiln build --config site.config.toml --profile
-
-# Validate config and content without writing output
+# Validate without writing dist/
 kiln check --config site.config.toml
 
-# Inspect project health with actionable warnings and hints
+# Inspect common project issues
 kiln doctor --config site.config.toml
 
-# Remove generated output, keeping .kiln state by default
-kiln clean --output dist
-
-# Remove only .kiln state
-kiln clean --output dist --cache
-
-# Start dev server with auto-rebuild
+# Start the development server
 kiln serve --config site.config.toml --port 4173
 ```
 
-## Project Structure
+## What kiln Provides
 
-```
-site/
-  site.config.toml   # Site configuration
-  content/
-    posts/           # Blog posts (Markdown + frontmatter)
-    pages/           # Static pages
-  templates/         # Tera HTML templates (optional, defaults built-in)
-  public/            # Static assets (copied with content-hash filenames)
-  styles.css         # Site stylesheet
-```
+- Markdown to HTML with TOML/YAML frontmatter
+- Tera templates with built-in defaults
+- Collections, taxonomies, sections, and pagination
+- RSS, sitemap, robots.txt, and 404 output
+- Draft filtering
+- Static asset fingerprinting and CSS `url(...)` rewriting
+- `asset_url(...)` for templates
+- Incremental rebuilds in `kiln serve`
+- Build manifests, asset manifests, and profiling output
+- `init`, `check`, `doctor`, `clean`, and `serve` CLI workflows
 
-## Configuration
+## Documentation
 
-Minimal `site.config.toml`:
+| Topic | Link |
+|---|---|
+| Start a new site | [docs/getting-started.md](docs/getting-started.md) |
+| Configure kiln | [docs/configuration.md](docs/configuration.md) |
+| Full config schema | [docs/config-schema.md](docs/config-schema.md) |
+| Write content | [docs/content-model.md](docs/content-model.md) |
+| Build templates | [docs/templates.md](docs/templates.md) |
+| Template context reference | [docs/template-context.md](docs/template-context.md) |
+| Use assets | [docs/assets.md](docs/assets.md) |
+| Understand builds and cache behavior | [docs/build-model.md](docs/build-model.md) |
+| Deploy output | [docs/deploy.md](docs/deploy.md) |
 
-```toml
-[site]
-title = "My Site"
-base_url = "https://example.com"
+## Examples
 
-[author]
-name = "Author"
-email = "author@example.com"
-```
+The examples are complete kiln sites and are built by the test suite.
 
-With collections and taxonomies:
-
-```toml
-[site]
-title = "My Site"
-base_url = "https://example.com"
-language = "en"
-
-paginate_by = 10
-paginate_path = "page"
-
-[[collections]]
-name = "posts"
-directory = "posts"
-route = "/posts/{slug}/"
-template = "post.html"
-date_ordered = true
-feed = true
-
-[[taxonomies]]
-name = "tags"
-slug = "tags"
-
-[[menus.main]]
-name = "Home"
-url = "/"
-weight = 1
+```bash
+cargo run -- build --config examples/blog-basic/site.config.toml --output /tmp/kiln-blog
+cargo run -- build --config examples/docs-site/site.config.toml --output /tmp/kiln-docs
+cargo run -- build --config examples/portfolio/site.config.toml --output /tmp/kiln-portfolio
 ```
 
-## CLI Commands
-
-| Command | Description |
-|---------|-------------|
-| `kiln init <path>` | Create a minimal site that builds with the built-in templates |
-| `kiln build` | Build the static site to output directory |
-| `kiln check` | Validate config and content without building |
-| `kiln doctor` | Inspect config, content, templates, routes, and assets with hints |
-| `kiln clean` | Remove generated output or only `.kiln` cache state |
-| `kiln serve` | Start dev server with auto-rebuild on file changes |
-
-### Build Flags
-
-| Flag | Description |
-|------|-------------|
-| `--config <path>` | Path to site config (default: `site/site.config.toml`) |
-| `--output <dir>` | Output directory (default: `dist`) |
-| `--drafts` | Include draft posts in the build |
-| `--profile` | Emit detailed build report with cache and render metrics |
+| Example | Use case |
+|---|---|
+| [examples/blog-basic](examples/blog-basic) | Personal blog with posts, pages, tags, and assets |
+| [examples/docs-site](examples/docs-site) | Small documentation site with a custom docs collection |
+| [examples/portfolio](examples/portfolio) | Portfolio with project metadata exposed through templates |
 
 ## Build from Source
 

@@ -1,0 +1,44 @@
+body {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 3rem 1.25rem;
+  background: #fcfbf7;
+  color: #20201d;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  line-height: 1.6;
+}
+
+a {
+  color: #8a3ffc;
+}
+
+header,
+footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+main {
+  margin-top: 4rem;
+}
+
+.hero {
+  max-width: 620px;
+}
+
+.projects {
+  display: grid;
+  gap: 1rem;
+  margin-top: 2rem;
+}
+
+.project {
+  padding-top: 1rem;
+  border-top: 1px solid #ded8ca;
+}
+
+.meta {
+  color: #6c675d;
+}

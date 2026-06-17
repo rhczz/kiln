@@ -1,0 +1,13 @@
+<section>
+  <h1>{{ section.title }}</h1>
+  {% if section.pages %}
+  <div class="doc-list">
+    {% for page in section.pages %}
+    <article>
+      <h2><a href="{{ page.url }}">{{ page.title }}</a></h2>
+      <p>{{ page.description }}</p>
+    </article>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>

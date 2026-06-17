@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="{{ site.language }}">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% if title %}{{ title }} · {{ site.title }}{% else %}{{ site.title }}{% endif %}</title>
+    <link rel="stylesheet" href="{{ site.stylesheet_href }}">
+  </head>
+  <body>
+    <header>
+      <a href="/"><strong>{{ site.title }}</strong></a>
+      {% if menus.main %}
+      <nav aria-label="Docs navigation">
+        {% for item in menus.main %}
+        <a href="{{ item.url }}">{{ item.name }}</a>
+        {% endfor %}
+      </nav>
+      {% endif %}
+    </header>
+    <main>{{ body | safe }}</main>
+  </body>
+</html>
