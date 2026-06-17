@@ -6,33 +6,14 @@ A lean static site compiler that bakes Markdown into HTML.
 
 Built with Rust. Zero runtime dependencies. Single binary.
 
-## Features
-
-- Markdown to HTML with syntax highlighting, tables, task lists (comrak)
-- TOML frontmatter for posts and pages
-- Tera templating engine with built-in default templates
-- Template dependency tracking for precise cache invalidation
-- Collections with custom routes and templates
-- Taxonomies (tags, categories, or custom groups) with dedicated templates
-- Paginated archives and section pages
-- RSS feed and sitemap generation
-- Built-in dev server with live reload on file changes
-- Asset fingerprinting with CSS url() rewriting and `asset_url()` Tera function
-- Parallel page rendering (tokio) for faster builds
-- Incremental builds with content, template, and asset-aware caching
-- Content hashing for cache busting
-- Draft support
-- Build profiling (`--profile`) with cache hit rate, per-page timing, and parallel rendering stats
-- Structured diagnostics with colored terminal output
-
 ## Quick Start
 
 ```bash
-# Create a new site
+# Create a site
 kiln init my-site
 cd my-site
 
-# Build your site
+# Build static output
 kiln build --config site.config.toml --output dist
 
 # Include draft posts
@@ -45,18 +26,13 @@ kiln build --config site.config.toml --profile
 kiln build --config site.config.toml --profile-json
 
 # Validate config and content without writing output
+# Validate without writing dist/
 kiln check --config site.config.toml
 
-# Inspect project health with actionable warnings and hints
+# Inspect common project issues
 kiln doctor --config site.config.toml
 
-# Remove generated output, keeping .kiln state by default
-kiln clean --output dist
-
-# Remove only .kiln state
-kiln clean --output dist --cache
-
-# Start dev server with auto-rebuild
+# Start the development server
 kiln serve --config site.config.toml --port 4173
 ```
 
@@ -135,7 +111,6 @@ weight = 1
 | `--output <dir>` | Output directory (default: `dist`) |
 | `--drafts` | Include draft posts in the build |
 | `--profile` | Emit detailed build report with cache and render metrics |
-| `--profile-json` | Emit machine-readable profile JSON for automation and baselines |
 
 ## Build from Source
 

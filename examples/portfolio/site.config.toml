@@ -1,0 +1,41 @@
+[site]
+title = "Mira Chen"
+subtitle = "Independent designer and engineer"
+description = "A compact portfolio powered by kiln."
+language = "en"
+base_url = "https://portfolio.example.com"
+
+[author]
+name = "Mira Chen"
+
+[paths]
+content = "content"
+templates = "templates"
+public = "public"
+styles = "styles.css"
+
+[[collections]]
+name = "projects"
+directory = "projects"
+route = "/work/{slug}/"
+template = "project.html"
+date_ordered = false
+feed = false
+
+[[collections]]
+name = "pages"
+directory = "pages"
+route = "/{slug}/"
+template = "page.html"
+date_ordered = false
+feed = false
+
+[[menu.main]]
+name = "Work"
+url = "/work/"
+weight = 1
+
+[[menu.main]]
+name = "About"
+url = "/about/"
+weight = 2

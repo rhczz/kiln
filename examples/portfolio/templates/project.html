@@ -1,0 +1,10 @@
+<article>
+  <p><a href="/">Work</a></p>
+  <h1>{{ page.title }}</h1>
+  <p class="meta">
+    {% if page.extra.client %}Client: {{ page.extra.client }}{% endif %}
+    {% if page.extra.year %} · {{ page.extra.year }}{% endif %}
+    {% if page.extra.role %} · {{ page.extra.role }}{% endif %}
+  </p>
+  {{ page.body_html | safe }}
+</article>

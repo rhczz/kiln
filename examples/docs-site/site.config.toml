@@ -1,0 +1,40 @@
+[site]
+title = "Kiln Docs Example"
+description = "A small documentation site built with kiln."
+language = "en"
+base_url = "https://docs.example.com"
+
+[author]
+name = "Docs Team"
+
+[paths]
+content = "content"
+templates = "templates"
+public = "public"
+styles = "styles.css"
+
+[[collections]]
+name = "docs"
+directory = "docs"
+route = "/docs/{slug}/"
+template = "doc.html"
+date_ordered = false
+feed = false
+
+[[collections]]
+name = "pages"
+directory = "pages"
+route = "/{slug}/"
+template = "page.html"
+date_ordered = false
+feed = false
+
+[[menu.main]]
+name = "Guide"
+url = "/docs/"
+weight = 1
+
+[[menu.main]]
+name = "Reference"
+url = "/docs/reference/"
+weight = 2

@@ -157,14 +157,14 @@ template = "term.html"
 
 ## 自定义表（theme 透传）
 
-配置文件中所有未识别的顶层表会自动透传为 `theme` 模板变量。
+配置文件中未识别的顶层表会自动透传为 `theme` 模板变量。
 
 ```toml
-# 这些会变成 theme.intro, theme.email 等
+# 这些会变成 theme.brand.intro, theme.brand.email 等
+[brand]
 intro = "Welcome to my blog"
 email = "hi@example.com"
 
-[nav]
 [[nav]]
 label = "Home"
 href = "/"
@@ -185,7 +185,7 @@ label = "GitHub"
 href = "https://github.com/example"
 ```
 
-模板中使用：`{{ theme.intro }}`、`{% for item in theme.nav %}` 等。
+模板中使用：`{{ theme.brand.intro }}`、`{% for item in theme.nav %}` 等。
 
 ## Frontmatter 字段
 
