@@ -402,6 +402,196 @@ fn pages_without_dates_render_correctly() {
 }
 
 #[test]
+fn page_extra_aliases_and_headings_are_available_to_templates() {
+    let f = FixtureBuilder::new("content-model");
+    f.write_styles("body {}");
+    f.write_template(
+        "page.html",
+        r#"TITLE {{ page.title }}
+COVER {{ page.extra.cover }}
+CTA {{ page.extra.cta.label }}={{ page.extra.cta.href }}
+ALIASES {% for alias in page.aliases %}{{ alias }} {% endfor %}
+HEADINGS {% for heading in page.headings %}{{ heading.level }}:{{ heading.id }}:{{ heading.text }} {% endfor %}
+TOC {% for heading in page.toc %}{{ heading.id }} {% endfor %}
+BODY {{ page.body_html | safe }}"#,
+    );
+    f.write_page(
+        "guide.md",
+        r#"title: "Guide"
+cover: "/images/guide.jpg"
+aliases:
+  - /old-guide/
+  - legacy/guide
+  - /guide.html
+cta:
+  label: "Read"
+  href: "/start/""#,
+        "# Intro\n\n## Install\n\nBody.",
+    );
+
+    let config = f.config();
+    let output = f.root().join("dist");
+
+    build(&config, &output, false, false).unwrap();
+
+    let page = read(&output.join("guide/index.html"));
+    assert!(page.contains("COVER &#x2F;images&#x2F;guide.jpg"));
+    assert!(page.contains("CTA Read=&#x2F;start&#x2F;"));
+    assert!(page
+        .contains("ALIASES &#x2F;old-guide&#x2F; &#x2F;legacy&#x2F;guide&#x2F; &#x2F;guide.html"));
+    assert!(page.contains("HEADINGS 1:intro:Intro 2:install:Install"));
+    assert!(page.contains("TOC intro install"));
+
+    let redirect = read(&output.join("old-guide/index.html"));
+    assert!(redirect.contains(r#"<meta http-equiv="refresh" content="0; url=/guide/">"#));
+    assert!(redirect.contains(r#"<link rel="canonical" href="/guide/">"#));
+    assert!(redirect.contains(r#"<a href="/guide/">/guide/</a>"#));
+
+    let second_redirect = read(&output.join("legacy/guide/index.html"));
+    assert!(second_redirect.contains("url=/guide/"));
+
+    let file_redirect = read(&output.join("guide.html"));
+    assert!(file_redirect.contains("url=/guide/"));
+}
+
+#[test]
+fn alias_that_collides_with_real_page_fails_build() {
+    let f = FixtureBuilder::new("alias-real-conflict");
+    f.write_styles("body {}");
+    f.write_page(
+        "guide.md",
+        r#"title: "Guide"
+aliases:
+  - /about/"#,
+        "Guide body.",
+    );
+    f.write_page("about.md", r#"title: "About""#, "About body.");
+
+    let config = f.config();
+    let err = build(&config, &f.root().join("dist"), false, false).unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("output path conflict at about/index.html"));
+    assert!(err.to_string().contains("alias /about/ from"));
+    assert!(err.to_string().contains("content/pages/guide.md"));
+    assert!(err.to_string().contains("content/pages/about.md"));
+}
+
+#[test]
+fn duplicate_aliases_fail_build() {
+    let f = FixtureBuilder::new("alias-alias-conflict");
+    f.write_styles("body {}");
+    f.write_page(
+        "guide.md",
+        r#"title: "Guide"
+aliases:
+  - /old/"#,
+        "Guide body.",
+    );
+    f.write_page(
+        "about.md",
+        r#"title: "About"
+aliases:
+  - /old/"#,
+        "About body.",
+    );
+
+    let config = f.config();
+    let err = build(&config, &f.root().join("dist"), false, false).unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("output path conflict at old/index.html"));
+    assert!(err.to_string().contains("alias /old/ from"));
+    assert!(err.to_string().contains("content/pages/guide.md"));
+    assert!(err.to_string().contains("content/pages/about.md"));
+}
+
+#[test]
+fn unsafe_alias_paths_fail_before_writing_outputs() {
+    for alias in ["/../escaped/", "../escaped", "/a/../../escaped/"] {
+        let f = FixtureBuilder::new("unsafe-alias");
+        f.write_styles("body {}");
+        f.write_page(
+            "guide.md",
+            &format!(
+                r#"title: "Guide"
+aliases:
+  - "{}""#,
+                alias
+            ),
+            "Guide body.",
+        );
+
+        let output = f.root().join("dist");
+        let err = build(&f.config(), &output, false, false).unwrap_err();
+
+        assert!(err.to_string().contains("invalid aliases in"));
+        assert!(
+            err.to_string().contains("parent path segments"),
+            "{alias}: {err}"
+        );
+        assert!(!f.root().join("escaped").exists(), "{alias}");
+    }
+}
+
+#[test]
+fn aliases_that_collide_with_generated_pages_fail_build() {
+    for (alias, conflict) in [
+        ("/", "generated Home page /"),
+        ("/404.html", "generated NotFound page /404.html"),
+        ("/tags/", "generated TaxonomyIndex page /tags/"),
+    ] {
+        let f = FixtureBuilder::new("alias-generated-conflict");
+        f.write_styles("body {}");
+        f.write_page(
+            "guide.md",
+            &format!(
+                r#"title: "Guide"
+aliases:
+  - "{}"
+tags: ["docs"]"#,
+                alias
+            ),
+            "Guide body.",
+        );
+
+        let err = build(&f.config(), &f.root().join("dist"), false, false).unwrap_err();
+
+        assert!(
+            err.to_string().contains(conflict),
+            "{alias}: expected {conflict} in {err}"
+        );
+        assert!(err.to_string().contains("alias"));
+        assert!(err.to_string().contains("content/pages/guide.md"));
+    }
+}
+
+#[test]
+fn alias_redirect_escapes_target_url_in_html() {
+    let f = FixtureBuilder::new("alias-escape");
+    f.write_styles("body {}");
+    f.write_page(
+        "guide.md",
+        r#"title: "Guide"
+slug: 'bad"<tag>&'
+aliases:
+  - /old-guide/"#,
+        "Guide body.",
+    );
+
+    build(&f.config(), &f.root().join("dist"), false, false).unwrap();
+
+    let redirect = read(&f.root().join("dist/old-guide/index.html"));
+    assert!(redirect.contains("url=/bad&quot;&lt;tag&gt;&amp;/"));
+    assert!(redirect.contains(r#"href="/bad&quot;&lt;tag&gt;&amp;/""#));
+    assert!(redirect
+        .contains(r#"<a href="/bad&quot;&lt;tag&gt;&amp;/">/bad&quot;&lt;tag&gt;&amp;/</a>"#));
+    assert!(!redirect.contains(r#"url=/bad"<tag>&/"#));
+}
+
+#[test]
 fn custom_taxonomy_uses_configured_term_template() {
     let f = FixtureBuilder::new("taxonomy");
     f.write_styles("body {}");

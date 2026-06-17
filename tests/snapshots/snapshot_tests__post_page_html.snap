@@ -34,6 +34,15 @@ expression: html
     <p><span>test</span><span>snapshot</span></p>
     
   </header>
+  
+  <nav aria-label="Table of contents">
+    <ol>
+      
+      <li><a href="#intro">Intro</a></li>
+      
+    </ol>
+  </nav>
+  
   <div><h2 id="intro" tabindex="-1">Intro <a class="heading-anchor" href="#intro" aria-hidden="true">#</a></h2>
 <p>Paragraph with <strong>bold</strong>.</p>
 <div class="table-scroll">

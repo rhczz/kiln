@@ -8,7 +8,10 @@ pub fn generate(config: &SiteConfig, pages: &[Page]) -> Vec<(String, String)> {
     let mut entries: Vec<String> = Vec::new();
     entries.push(url_entry(&config.site.base_url, "/"));
     for page in pages {
-        if matches!(page.kind, PageKind::Home | PageKind::NotFound) {
+        if matches!(
+            page.kind,
+            PageKind::Home | PageKind::Alias | PageKind::NotFound
+        ) {
             continue;
         }
         entries.push(url_entry(&config.site.base_url, &page.url));
@@ -163,10 +166,13 @@ mod tests {
                     draft: false,
                     tags: vec![],
                     taxonomy_terms: Default::default(),
+                    extra: serde_json::json!({}),
+                    aliases: vec![],
                     raw_date: chrono::NaiveDate::from_ymd_opt(2026, 6, 2),
                     headings: vec![],
                     shortcodes: vec![],
                 }),
+                redirect_to: None,
             },
             Page {
                 kind: PageKind::Single,
@@ -194,10 +200,13 @@ mod tests {
                     draft: false,
                     tags: vec![],
                     taxonomy_terms: Default::default(),
+                    extra: serde_json::json!({}),
+                    aliases: vec![],
                     raw_date: None,
                     headings: vec![],
                     shortcodes: vec![],
                 }),
+                redirect_to: None,
             },
             Page {
                 kind: PageKind::NotFound,
@@ -208,6 +217,7 @@ mod tests {
                 description: String::new(),
                 source_path: None,
                 content_item: None,
+                redirect_to: None,
             },
         ];
 
