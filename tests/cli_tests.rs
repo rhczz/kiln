@@ -255,6 +255,74 @@ fn build_profile_reports_cache_activity_from_cli_path() {
 }
 
 #[test]
+fn build_profile_json_outputs_machine_readable_profile() {
+    let fixture = CliFixture::new("profile-json");
+    fixture.write_profile_site();
+    let output_dir = fixture.root().join("dist");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_kiln"))
+        .arg("build")
+        .arg("--config")
+        .arg(fixture.root().join("site.config.toml"))
+        .arg("--output")
+        .arg(&output_dir)
+        .arg("--profile-json")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "kiln build --profile-json failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let profile: serde_json::Value =
+        serde_json::from_str(&stderr).expect("profile output should be valid JSON");
+
+    assert_eq!(profile["schema_version"], 1);
+    assert!(profile["total_ms"].as_u64().is_some());
+    assert!(profile["phases"]
+        .as_array()
+        .expect("phases should be an array")
+        .iter()
+        .any(|phase| phase["name"] == "render_pages"));
+    assert!(profile["cache"]["misses"].as_u64().unwrap() > 0);
+    assert!(profile["rendering"]["page_renders"].as_u64().unwrap() > 0);
+    assert!(
+        profile["parallel"]["threads"].as_u64().unwrap() > 0,
+        "parallel stats should include worker count"
+    );
+}
+
+#[test]
+fn build_rejects_profile_and_profile_json_together() {
+    let fixture = CliFixture::new("profile-conflict");
+    fixture.write_profile_site();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_kiln"))
+        .arg("build")
+        .arg("--config")
+        .arg(fixture.root().join("site.config.toml"))
+        .arg("--profile")
+        .arg("--profile-json")
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "kiln build should reject conflicting profile flags\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--profile"), "{stderr}");
+    assert!(stderr.contains("--profile-json"), "{stderr}");
+}
+
+#[test]
 fn init_creates_a_site_that_builds() {
     let fixture = CliFixture::new("init");
     let site_dir = fixture.root().join("my-site");

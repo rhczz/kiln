@@ -21,6 +21,7 @@ pub fn build(
         mode: BuildMode::Full,
         emit_report: true,
         profile,
+        profile_json: false,
     };
 
     if profile {
@@ -48,6 +49,7 @@ pub fn build_public_incremental(
             mode: BuildMode::Public,
             emit_report: true,
             profile: false,
+            profile_json: false,
         },
     )
 }
@@ -64,6 +66,7 @@ pub struct BuildOptions {
     pub mode: BuildMode,
     pub emit_report: bool,
     pub profile: bool,
+    pub profile_json: bool,
 }
 
 pub struct BuildArtifacts {
@@ -89,7 +92,7 @@ pub fn build_with_artifacts(
 ) -> anyhow::Result<()> {
     config.validate_structure()?;
     let collections = site_config::effective_collections(config);
-    let mut timer = if opts.profile {
+    let mut timer = if opts.profile || opts.profile_json {
         BuildTimer::with_profile()
     } else {
         BuildTimer::new()
@@ -105,7 +108,7 @@ pub fn build_with_artifacts(
     }
     std::fs::create_dir_all(output_dir)?;
 
-    timer.phase("copy_public");
+    timer.phase("copy_public_assets");
     let asset_manifest = if !matches!(opts.mode, BuildMode::Content) {
         let prev_manifest = crate::AssetManifest::load(output_dir).unwrap_or_default();
         let manifest =
@@ -139,7 +142,7 @@ pub fn build_with_artifacts(
         crate::AssetManifest::load(output_dir).unwrap_or_default()
     };
 
-    timer.phase("load_content");
+    timer.phase("load_content_markdown");
     let all_items: Vec<ContentItem> = {
         let mut items: Vec<ContentItem> = Vec::new();
         for collection in &collections {
@@ -199,7 +202,7 @@ pub fn build_with_artifacts(
         rewrite_404_stylesheet(output_dir, &artifacts.style_asset)?;
     }
 
-    timer.phase("generate_feeds");
+    timer.phase("generate_feeds_sitemap");
     let feed_items = collect_feed_items(&collections, &site_model.all_items);
     let rss = crate::rss::generate(config, &feed_items);
     std::fs::write(output_dir.join("rss.xml"), rss)?;
@@ -260,15 +263,23 @@ pub fn build_with_artifacts(
         timer.print_report(site_model.all_items.len(), date_ordered_count, output_count);
     }
 
-    diagnostics.emit_all();
-    crate::print_build_summary(&diagnostics);
+    if !opts.profile_json {
+        diagnostics.emit_all();
+        crate::print_build_summary(&diagnostics);
+    }
 
-    if opts.profile {
+    if opts.profile || opts.profile_json {
         if let Some(cache) = cache.as_ref() {
             let (hits, misses) = cache.cache_stats();
             timer.set_cache_stats(hits, misses);
         }
-        timer.print_profile_report();
+        if opts.profile_json {
+            if let Some(json) = timer.profile_json() {
+                eprintln!("{}", json);
+            }
+        } else if opts.profile {
+            timer.print_profile_report();
+        }
     }
 
     Ok(())
@@ -319,6 +330,21 @@ fn render_model_pages(
     struct PageTask {
         index: usize,
         page: model::Page,
+    }
+
+    struct RenderedPage {
+        index: usize,
+        html: String,
+        url: String,
+        template: String,
+        elapsed_ms: u128,
+    }
+
+    /// Carries the page index alongside the render outcome so failed renders
+    /// keep their position when results are sorted back into page order.
+    struct RenderResult {
+        index: usize,
+        result: anyhow::Result<RenderedPage>,
     }
 
     let mut cached_results: Vec<(usize, String)> = Vec::new();
@@ -376,15 +402,20 @@ fn render_model_pages(
     let threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
+    let worker_count = threads.min(tasks.len()).max(1);
+    let mut task_chunks: Vec<Vec<PageTask>> = (0..worker_count).map(|_| Vec::new()).collect();
+    for (i, task) in tasks.into_iter().enumerate() {
+        task_chunks[i % worker_count].push(task);
+    }
     let parallel_start = std::time::Instant::now();
     let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(threads)
+        .worker_threads(worker_count)
         .build()?;
 
-    let results: Vec<(usize, anyhow::Result<String>)> = rt.block_on(async {
-        let mut handles = Vec::with_capacity(tasks.len());
+    let mut results: Vec<RenderResult> = rt.block_on(async {
+        let mut handles = Vec::with_capacity(task_chunks.len());
 
-        for task in tasks {
+        for chunk in task_chunks.into_iter().filter(|chunk| !chunk.is_empty()) {
             let templates = template_sources.clone();
             let cfg = config.clone();
             let href = style_href.clone();
@@ -393,16 +424,25 @@ fn render_model_pages(
             let c_hash = config_hash.clone();
             let a_manifest = asset_manifest.clone();
             let sm = shared_site_model.clone();
-            let idx = task.index;
 
             handles.push(tokio::task::spawn_blocking(move || {
                 let mut tera = tera::Tera::default();
                 for (name, source) in templates.iter() {
                     if let Err(e) = tera.add_raw_template(name, source) {
-                        return (
-                            idx,
-                            Err(anyhow::anyhow!("Failed to add template {}: {}", name, e)),
-                        );
+                        // The template error fails every page this worker would
+                        // render; emit one indexed error per task so each keeps
+                        // its own page position when sorted.
+                        return chunk
+                            .into_iter()
+                            .map(|task| RenderResult {
+                                index: task.index,
+                                result: Err(anyhow::anyhow!(
+                                    "Failed to add template {}: {}",
+                                    name,
+                                    e
+                                )),
+                            })
+                            .collect();
                     }
                 }
                 let asset_mappings: std::sync::Arc<
@@ -428,44 +468,65 @@ fn render_model_pages(
                     asset_hash: &asset_hash,
                 };
 
-                match render_one_page(&render_env, &sm, &task.page) {
-                    Ok(html) => (idx, Ok(html)),
-                    Err(e) => (idx, Err(e)),
+                let mut rendered = Vec::with_capacity(chunk.len());
+                for task in chunk {
+                    let template =
+                        effective_template_for_page(&engine, &task.page, &sm, &cfg.paginate_path);
+                    let start = std::time::Instant::now();
+                    let result =
+                        render_one_page(&render_env, &sm, &task.page).map(|html| RenderedPage {
+                            index: task.index,
+                            html,
+                            url: task.page.url.clone(),
+                            template,
+                            elapsed_ms: start.elapsed().as_millis(),
+                        });
+                    rendered.push(RenderResult {
+                        index: task.index,
+                        result,
+                    });
                 }
+                rendered
             }));
         }
 
-        let mut results: Vec<(usize, anyhow::Result<String>)> = Vec::with_capacity(handles.len());
+        let mut results: Vec<RenderResult> = Vec::new();
         for handle in handles {
             match handle.await {
-                Ok((i, result)) => results.push((i, result)),
-                Err(e) => results.push((0, Err(anyhow::anyhow!("task panicked: {}", e)))),
+                Ok(worker_results) => results.extend(worker_results),
+                Err(e) => results.push(RenderResult {
+                    // A panicked worker has no single page index; sort it last so
+                    // it never lets later pages get written ahead of a real failure.
+                    index: usize::MAX,
+                    result: Err(anyhow::anyhow!("task panicked: {}", e)),
+                }),
             }
         }
         results
     });
 
     let wall_time = parallel_start.elapsed().as_millis();
-    timer.set_parallel_stats(threads, wall_time);
+    timer.set_parallel_stats(worker_count, wall_time);
+    results.sort_by_key(|result| result.index);
 
     // Phase 4: write results in order, update cache
     results
         .into_iter()
-        .try_for_each(|(idx, result)| -> anyhow::Result<()> {
-            let html = result?;
-            let page = &site_model.pages[idx];
+        .try_for_each(|render_result| -> anyhow::Result<()> {
+            let rendered = render_result.result?;
+            let page = &site_model.pages[rendered.index];
             let output_path = env.output_dir.join(&page.output_path);
-            write_page_if_changed(&output_path, &html)?;
-            timer.end_page(true);
+            write_page_if_changed(&output_path, &rendered.html)?;
+            timer.record_page_render(&rendered.url, &rendered.template, rendered.elapsed_ms);
 
             if let Some(cache) = cache.as_mut() {
                 let (_, render_hash) = page_render_key(env, page, site_model);
                 if page.kind == model::PageKind::Single {
                     if let Some(item) = &page.content_item {
-                        cache.store_render(&item.source_path, render_hash, html);
+                        cache.store_render(&item.source_path, render_hash, rendered.html);
                     }
                 } else {
-                    cache.store_generic_render(page.url.clone(), render_hash, html);
+                    cache.store_generic_render(page.url.clone(), render_hash, rendered.html);
                 }
             }
             Ok(())
