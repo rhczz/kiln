@@ -39,14 +39,14 @@ public/
   downloads/resume.pdf
 ```
 
-Templates can reference them through `asset_url`:
+Templates can reference them through `asset_url` with a leading `/` to produce root-relative URLs:
 
 ```html
-<img src="{{ asset_url(path='images/avatar.svg') }}" alt="Avatar">
-<script src="{{ asset_url(path='app.js') }}"></script>
+<img src="/{{ asset_url(path='images/avatar.svg') }}" alt="Avatar">
+<script src="/{{ asset_url(path='app.js') }}"></script>
 ```
 
-`asset_url("app.js")` and `asset_url(path="app.js")` are both supported.
+`asset_url` returns a path relative to `public/` (e.g. `images/avatar.<hash>.svg`). Prefix with `/` so links resolve correctly from any page depth.
 
 ## Fingerprinting
 

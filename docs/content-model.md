@@ -159,4 +159,3 @@ kiln uses comrak and supports common writing features:
 - autolinks
 - footnotes
 - description lists
-- syntax highlighting

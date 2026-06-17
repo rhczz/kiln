@@ -63,6 +63,7 @@ fn examples_build_successfully() {
             "portfolio",
             &[
                 "index.html",
+                "work/index.html",
                 "work/atlas/index.html",
                 "work/linea/index.html",
                 "about/index.html",
