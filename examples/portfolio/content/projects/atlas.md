@@ -1,5 +1,6 @@
 ---
 title: "Atlas Knowledge Base"
+date: "2026-01-15"
 description: "A compact documentation experience for an internal platform."
 client: "Atlas Labs"
 year: "2026"

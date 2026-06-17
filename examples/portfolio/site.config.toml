@@ -19,7 +19,7 @@ name = "projects"
 directory = "projects"
 route = "/work/{slug}/"
 template = "project.html"
-date_ordered = false
+date_ordered = true
 feed = false
 
 [[collections]]

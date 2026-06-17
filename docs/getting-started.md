@@ -88,7 +88,7 @@ kiln serve --config site.config.toml --output dist --port 4173
 
 Open `http://127.0.0.1:4173`.
 
-The dev server watches content, templates, public assets, styles, and config. If a rebuild fails, it keeps serving the last successful output.
+The dev server watches content, templates, public assets, styles, and config. A full rebuild removes the output directory before rebuilding, so a failed rebuild may leave the output directory incomplete.
 
 ## Clean Output
 

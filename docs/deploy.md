@@ -70,7 +70,7 @@ dist/
   .kiln/
 ```
 
-`.kiln/` is build metadata. It is harmless to publish, but hosts do not need it. If your deployment tool supports ignore rules, you may exclude `dist/.kiln/`.
+`.kiln/` is build metadata that may contain local filesystem paths. Exclude `dist/.kiln/` when deploying.
 
 ## Pre-publish Checklist
 
