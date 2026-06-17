@@ -9,6 +9,7 @@ use crate::content::ContentItem;
 pub enum PageKind {
     Home,
     Single,
+    Alias,
     Section,
     TaxonomyIndex,
     Term,
@@ -26,6 +27,7 @@ pub struct Page {
     pub description: String,
     pub source_path: Option<PathBuf>,
     pub content_item: Option<ContentItem>,
+    pub redirect_to: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -95,7 +97,22 @@ pub fn build_site_model(
             description: item.description.clone(),
             source_path: Some(item.source_path.clone()),
             content_item: Some(item.clone()),
+            redirect_to: None,
         });
+
+        for alias in &item.aliases {
+            pages.push(Page {
+                kind: PageKind::Alias,
+                url: alias.clone(),
+                output_path: page_output_path(alias),
+                template: String::new(),
+                title: item.title.clone(),
+                description: item.description.clone(),
+                source_path: Some(item.source_path.clone()),
+                content_item: Some(item.clone()),
+                redirect_to: Some(item.url.clone()),
+            });
+        }
     }
 
     // Homepage
@@ -108,6 +125,7 @@ pub fn build_site_model(
         description: config.site.description.clone(),
         source_path: None,
         content_item: None,
+        redirect_to: None,
     });
 
     // 404
@@ -120,6 +138,7 @@ pub fn build_site_model(
         description: String::new(),
         source_path: None,
         content_item: None,
+        redirect_to: None,
     });
 
     for item in all_items.iter() {
@@ -145,6 +164,7 @@ pub fn build_site_model(
             description: String::new(),
             source_path: None,
             content_item: None,
+            redirect_to: None,
         });
     }
 
@@ -166,6 +186,7 @@ pub fn build_site_model(
             description: String::new(),
             source_path: None,
             content_item: None,
+            redirect_to: None,
         });
         for term in &tax.terms {
             pages.push(Page {
@@ -177,6 +198,7 @@ pub fn build_site_model(
                 description: String::new(),
                 source_path: None,
                 content_item: None,
+                redirect_to: None,
             });
         }
     }
@@ -259,6 +281,11 @@ pub fn validate_unique_page_outputs(site_model: &SiteModel) -> anyhow::Result<()
 }
 
 pub fn page_origin(page: &Page) -> String {
+    if page.kind == PageKind::Alias {
+        if let Some(source) = &page.source_path {
+            return format!("alias {} from {}", page.url, source.display());
+        }
+    }
     if let Some(source) = &page.source_path {
         return source.display().to_string();
     }
@@ -528,6 +555,8 @@ fn page_output_path(url: &str) -> PathBuf {
     let trimmed = url.trim_start_matches('/').trim_end_matches('/');
     if trimmed.is_empty() {
         PathBuf::from("index.html")
+    } else if trimmed.ends_with(".html") {
+        PathBuf::from(trimmed)
     } else {
         PathBuf::from(trimmed).join("index.html")
     }
@@ -564,6 +593,7 @@ fn push_paginate_pages(
             description: description.into(),
             source_path: None,
             content_item: None,
+            redirect_to: None,
         });
     }
 }
@@ -615,6 +645,8 @@ mod tests {
             draft: false,
             tags: vec![],
             taxonomy_terms: HashMap::new(),
+            extra: serde_json::json!({}),
+            aliases: vec![],
             raw_date: None,
             headings: vec![],
             shortcodes: vec![],

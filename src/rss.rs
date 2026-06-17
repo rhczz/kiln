@@ -105,6 +105,8 @@ mod tests {
             draft: false,
             tags: vec![],
             taxonomy_terms: Default::default(),
+            extra: serde_json::json!({}),
+            aliases: vec![],
             raw_date: chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok(),
             headings: vec![],
             shortcodes: vec![],

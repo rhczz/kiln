@@ -107,6 +107,7 @@ impl Engine {
                     .map(|s| format!("{}.html", s))
                     .unwrap_or_else(|| "page.html".into());
             }
+            PageKind::Alias => return String::new(),
             PageKind::Home => return "home.html".into(),
             PageKind::NotFound => return "404.html".into(),
             PageKind::Section => {

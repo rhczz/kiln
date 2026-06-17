@@ -8,5 +8,14 @@
     <p>{% for tag in page.tags %}<span>{{ tag }}</span>{% endfor %}</p>
     {% endif %}
   </header>
+  {% if page.toc %}
+  <nav aria-label="Table of contents">
+    <ol>
+      {% for heading in page.toc %}
+      <li><a href="#{{ heading.id }}">{{ heading.text }}</a></li>
+      {% endfor %}
+    </ol>
+  </nav>
+  {% endif %}
   <div>{{ page.body_html | safe }}</div>
 </article>

@@ -489,6 +489,7 @@ fn render_one_page(
             let is_article = item.raw_date.is_some();
             render_single(env, item, &page.template, is_article)
         }
+        model::PageKind::Alias => render_alias_page(page),
         model::PageKind::Home => render_home_page(env, site_model, None),
         model::PageKind::Section => render_section_page(env, site_model, page, &page.url, None),
         model::PageKind::TaxonomyIndex => render_taxonomy_index_page(env, site_model, page),
@@ -545,6 +546,10 @@ fn generic_page_content_hash(page: &model::Page, site_model: &model::SiteModel) 
         model::PageKind::NotFound => {
             parts.push("404".into());
         }
+        model::PageKind::Alias => {
+            parts.push(page.url.clone());
+            parts.push(page.redirect_to.clone().unwrap_or_default());
+        }
         _ => {
             parts.push(page.url.clone());
         }
@@ -580,6 +585,29 @@ fn render_single(
         dir_path,
         is_article,
     )
+}
+
+fn render_alias_page(page: &model::Page) -> anyhow::Result<String> {
+    let target = page
+        .redirect_to
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("alias page missing redirect target: {}", page.url))?;
+    let escaped_target = crate::sitemap::escape_xml(target);
+    Ok(format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="refresh" content="0; url={escaped_target}">
+  <link rel="canonical" href="{escaped_target}">
+  <title>Redirecting to {escaped_target}</title>
+</head>
+<body>
+  <p>Redirecting to <a href="{escaped_target}">{escaped_target}</a></p>
+</body>
+</html>
+"#
+    ))
 }
 
 fn render_home_page(
@@ -1065,7 +1093,21 @@ fn record_manifest_entries(
     engine: &Engine,
     paginate_path: &str,
 ) {
+    let mut content_outputs: std::collections::BTreeMap<PathBuf, Vec<PathBuf>> =
+        std::collections::BTreeMap::new();
     for page in &site_model.pages {
+        if page.content_item.is_some() {
+            let source = page
+                .source_path
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(&page.output_path));
+            content_outputs
+                .entry(source)
+                .or_default()
+                .push(page.output_path.clone());
+            continue;
+        }
+
         let source = page
             .source_path
             .clone()
@@ -1081,6 +1123,38 @@ fn record_manifest_entries(
             source,
             vec![page.output_path.clone()],
             content_hash,
+            template_deps,
+            template_hash,
+        );
+    }
+
+    for (source, mut outputs) in content_outputs {
+        outputs.sort();
+        outputs.dedup();
+        let page = site_model
+            .pages
+            .iter()
+            .find(|page| page.source_path.as_ref() == Some(&source))
+            .expect("content output source should have at least one page");
+        let item = page
+            .content_item
+            .as_ref()
+            .expect("content output source should have content item");
+        let mut template_deps = Vec::new();
+        for page in site_model
+            .pages
+            .iter()
+            .filter(|page| page.source_path.as_ref() == Some(&source))
+        {
+            template_deps.extend(page_template_deps(engine, page, site_model, paginate_path));
+        }
+        template_deps.sort();
+        template_deps.dedup();
+        let template_hash = template_deps_hash(engine, &template_deps);
+        manifest.record(
+            source,
+            outputs,
+            item.content_hash.clone(),
             template_deps,
             template_hash,
         );
@@ -1144,6 +1218,7 @@ fn effective_template_for_page(
     paginate_path: &str,
 ) -> String {
     match page.kind {
+        model::PageKind::Alias => String::new(),
         model::PageKind::Single | model::PageKind::Home | model::PageKind::NotFound => {
             page.template.clone()
         }
@@ -1196,6 +1271,9 @@ fn page_template_deps(
     paginate_path: &str,
 ) -> Vec<String> {
     let effective = effective_template_for_page(engine, page, site_model, paginate_path);
+    if effective.is_empty() {
+        return Vec::new();
+    }
     let mut deps: Vec<String> = engine.template_deps(&effective);
     // All pages go through wrap_with_layout → layout.html
     if effective != "layout.html" {
@@ -1392,6 +1470,9 @@ fn make_item_context(item: &ContentItem) -> serde_json::Value {
         obj.insert("tags".into(), serde_json::json!(item.tags));
         obj.insert("taxonomies".into(), serde_json::json!(item.taxonomy_terms));
         obj.insert("type".into(), serde_json::json!(item.collection));
+        obj.insert("extra".into(), item.extra.clone());
+        obj.insert("aliases".into(), serde_json::json!(item.aliases));
+        obj.insert("headings".into(), serde_json::json!(item.headings));
         obj.insert("toc".into(), serde_json::json!(item.headings));
     }
     ctx
@@ -1832,6 +1913,8 @@ Content here."#,
                 draft: false,
                 tags: vec![],
                 taxonomy_terms: Default::default(),
+                extra: serde_json::json!({}),
+                aliases: vec![],
                 raw_date: chrono::NaiveDate::from_ymd_opt(2026, 5, 1),
                 headings: vec![],
                 shortcodes: vec![],
@@ -1854,6 +1937,8 @@ Content here."#,
                 draft: false,
                 tags: vec![],
                 taxonomy_terms: Default::default(),
+                extra: serde_json::json!({}),
+                aliases: vec![],
                 raw_date: chrono::NaiveDate::from_ymd_opt(2026, 6, 1),
                 headings: vec![],
                 shortcodes: vec![],
@@ -1876,6 +1961,8 @@ Content here."#,
                 draft: false,
                 tags: vec![],
                 taxonomy_terms: Default::default(),
+                extra: serde_json::json!({}),
+                aliases: vec![],
                 raw_date: None,
                 headings: vec![],
                 shortcodes: vec![],

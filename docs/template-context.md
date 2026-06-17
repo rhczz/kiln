@@ -180,6 +180,16 @@ Post（date_ordered 集合）：
   "long_date": "June 1, 2026",
   "year": "2026",
   "tags": ["rust", "ssg"],
+  "aliases": ["/old-post/"],
+  "extra": {
+    "cover": "/images/post.jpg"
+  },
+  "headings": [
+    { "level": 2, "id": "install", "text": "Install" }
+  ],
+  "toc": [
+    { "level": 2, "id": "install", "text": "Install" }
+  ],
   "type": "posts"
 }
 ```
@@ -199,6 +209,10 @@ Page（非 date_ordered 集合）：
   "long_date": "",
   "year": "",
   "tags": [],
+  "aliases": [],
+  "extra": {},
+  "headings": [],
+  "toc": [],
   "type": "pages"
 }
 ```
@@ -216,7 +230,43 @@ Page（非 date_ordered 集合）：
 | `page.long_date` | string | 长格式日期（`June 1, 2026`），无日期时为空 |
 | `page.year` | string | 年份字符串，无日期时为空 |
 | `page.tags` | string[] | 标签列表 |
+| `page.aliases` | string[] | frontmatter 中声明的旧 URL，已规范化为站点相对路径 |
+| `page.extra` | object | 未被 kiln 识别的 frontmatter 字段，原样透传给模板 |
+| `page.headings` | object[] | Markdown 标题列表，每项包含 `level`、`id`、`text` |
+| `page.toc` | object[] | `page.headings` 的别名，便于模板渲染目录 |
 | `page.type` | string | 所属集合名称（`"posts"` / `"pages"` / 自定义） |
+
+未识别 frontmatter 字段会进入 `page.extra`，但 kiln 的一等字段不会重复放入其中。例如：
+
+```yaml
+---
+title: "Guide"
+cover: "/images/guide.jpg"
+aliases:
+  - /old-guide/
+cta:
+  label: "Read"
+  href: "/start/"
+---
+```
+
+模板中可使用 `{{ page.extra.cover }}`、`{{ page.extra.cta.label }}`。`aliases` 是一等字段，应通过 `page.aliases` 访问。
+
+`aliases` 会为每个旧 URL 生成一个静态 HTML 跳转页。alias 路径会被规范化为站点相对路径，例如 `old-guide` 变成 `/old-guide/`。如果 alias 与真实页面、另一个 alias 或生成页输出路径冲突，构建会失败并指出冲突来源。
+
+`page.headings` / `page.toc` 来自 Markdown 渲染阶段生成的标题锚点，适合在模板中渲染目录：
+
+```html
+{% if page.toc %}
+<nav aria-label="Table of contents">
+  <ol>
+    {% for heading in page.toc %}
+    <li><a href="#{{ heading.id }}">{{ heading.text }}</a></li>
+    {% endfor %}
+  </ol>
+</nav>
+{% endif %}
+```
 
 典型用法：
 ```html

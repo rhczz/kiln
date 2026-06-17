@@ -29,6 +29,8 @@ pub struct ContentItem {
     pub draft: bool,
     pub tags: Vec<String>,
     pub taxonomy_terms: HashMap<String, Vec<String>>,
+    pub extra: serde_json::Value,
+    pub aliases: Vec<String>,
     #[serde(skip)]
     pub raw_date: Option<chrono::NaiveDate>,
     pub headings: Vec<crate::render::Heading>,
@@ -49,6 +51,8 @@ struct ItemFrontmatter {
     draft: bool,
     #[serde(default)]
     tags: Vec<String>,
+    #[serde(default)]
+    aliases: Vec<String>,
     #[serde(default)]
     slug: String,
     #[serde(flatten)]
@@ -150,6 +154,8 @@ pub(crate) fn parse_content_item(
     };
 
     let url = collection.route.replace("{slug}", &slug);
+    let aliases = normalize_aliases(&fm.aliases)
+        .map_err(|err| anyhow::anyhow!("invalid aliases in {:?}: {}", path, err))?;
     let (processed_body, shortcodes) = crate::shortcode::preprocess(body);
     let rendered = render::markdown_to_html(&processed_body);
 
@@ -196,10 +202,100 @@ pub(crate) fn parse_content_item(
         draft: fm.draft,
         tags: fm.tags,
         taxonomy_terms,
+        extra: yaml_extra_to_json(fm.extra)?,
+        aliases,
         raw_date,
         headings: rendered.headings,
         shortcodes,
     }))
+}
+
+fn normalize_aliases(aliases: &[String]) -> anyhow::Result<Vec<String>> {
+    aliases
+        .iter()
+        .map(|alias| normalize_alias(alias))
+        .collect::<anyhow::Result<Vec<_>>>()
+}
+
+fn normalize_alias(alias: &str) -> anyhow::Result<String> {
+    let trimmed = alias.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("alias cannot be empty");
+    }
+    if trimmed.contains("://") || trimmed.starts_with("//") {
+        anyhow::bail!("alias must be a site-relative path: {}", alias);
+    }
+    if trimmed.contains('\\') {
+        anyhow::bail!("alias cannot contain backslashes: {}", alias);
+    }
+
+    let mut normalized = trimmed.to_string();
+    if !normalized.starts_with('/') {
+        normalized.insert(0, '/');
+    }
+    if normalized.ends_with(".html") {
+        validate_alias_path(&normalized)?;
+        return Ok(normalized);
+    }
+    if !normalized.ends_with('/') {
+        normalized.push('/');
+    }
+    validate_alias_path(&normalized)?;
+    Ok(normalized)
+}
+
+fn validate_alias_path(alias: &str) -> anyhow::Result<()> {
+    let trimmed = alias.trim_start_matches('/').trim_end_matches('/');
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+
+    for segment in trimmed.split('/') {
+        if segment.is_empty() || segment == "." {
+            anyhow::bail!("alias cannot contain empty or current path segments");
+        }
+        if segment == ".." {
+            anyhow::bail!("alias cannot contain parent path segments");
+        }
+    }
+    Ok(())
+}
+
+fn yaml_extra_to_json(
+    extra: HashMap<String, serde_yaml::Value>,
+) -> anyhow::Result<serde_json::Value> {
+    let mut obj = serde_json::Map::new();
+    for (key, value) in extra {
+        obj.insert(key, yaml_value_to_json(value)?);
+    }
+    Ok(serde_json::Value::Object(obj))
+}
+
+fn yaml_value_to_json(value: serde_yaml::Value) -> anyhow::Result<serde_json::Value> {
+    match value {
+        serde_yaml::Value::Null => Ok(serde_json::Value::Null),
+        serde_yaml::Value::Bool(value) => Ok(serde_json::Value::Bool(value)),
+        serde_yaml::Value::Number(value) => {
+            serde_json::to_value(value).context("failed to convert frontmatter number extra field")
+        }
+        serde_yaml::Value::String(value) => Ok(serde_json::Value::String(value)),
+        serde_yaml::Value::Sequence(values) => values
+            .into_iter()
+            .map(yaml_value_to_json)
+            .collect::<anyhow::Result<Vec<_>>>()
+            .map(serde_json::Value::Array),
+        serde_yaml::Value::Mapping(values) => {
+            let mut obj = serde_json::Map::new();
+            for (key, value) in values {
+                let serde_yaml::Value::String(key) = key else {
+                    anyhow::bail!("frontmatter extra object keys must be strings");
+                };
+                obj.insert(key, yaml_value_to_json(value)?);
+            }
+            Ok(serde_json::Value::Object(obj))
+        }
+        serde_yaml::Value::Tagged(tagged) => yaml_value_to_json(tagged.value),
+    }
 }
 
 pub(crate) fn fingerprint(bytes: &[u8]) -> String {
