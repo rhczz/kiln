@@ -1,12 +1,49 @@
-<section class="section-list">
+<section class="section-page">
+  {% if section.breadcrumb %}
+  <nav class="breadcrumb" aria-label="Breadcrumb">
+    <a href="/">Home</a>
+    {% for crumb in section.breadcrumb %}
+    <span class="breadcrumb-sep">/</span>
+    {% if crumb.url %}<a href="{{ crumb.url }}">{{ crumb.title }}</a>{% else %}<span>{{ crumb.title }}</span>{% endif %}
+    {% endfor %}
+  </nav>
+  {% endif %}
+
   {% if section.title %}
   <h1>{{ section.title }}</h1>
   {% endif %}
+
+  {% if section.children %}
+  <div class="subsections">
+    {% for child in section.children %}
+    <a href="{{ child.url }}" class="subsection-link">{{ child.title }}</a>
+    {% endfor %}
+  </div>
+  {% endif %}
+
   {% if section.pages %}
-  <ul>
+  <ul class="section-list">
     {% for page in section.pages %}
-    <li><a href="{{ page.url }}">{{ page.title }}</a></li>
+    <li class="section-item">
+      <a href="{{ page.url }}" class="section-item-link">
+        <span class="section-item-title">{{ page.title }}</span>
+        {% if page.short_date %}<time datetime="{{ page.iso_date }}" class="section-item-date">{{ page.short_date }}</time>{% endif %}
+      </a>
+      {% if page.description %}<p class="section-item-desc">{{ page.description }}</p>{% endif %}
+    </li>
     {% endfor %}
   </ul>
+  {% endif %}
+
+  {% if paginator and paginator.total_pages > 1 %}
+  <nav class="pagination" aria-label="Pagination">
+    {% if paginator.prev_url %}
+    <a href="{{ paginator.prev_url }}" class="pagination-link pagination-prev" rel="prev">&larr; Previous</a>
+    {% endif %}
+    <span class="pagination-info">Page {{ paginator.current_index }} of {{ paginator.total_pages }}</span>
+    {% if paginator.next_url %}
+    <a href="{{ paginator.next_url }}" class="pagination-link pagination-next" rel="next">Next &rarr;</a>
+    {% endif %}
+  </nav>
   {% endif %}
 </section>

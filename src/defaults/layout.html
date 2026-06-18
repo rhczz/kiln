@@ -1,39 +1,57 @@
 <!doctype html>
-<html lang="{{ site.language }}">
+<html lang="{{ site.language | default(value='en') }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% if title %}{{ title }} · {{ site.title }}{% else %}{{ site.title }}{% endif %}</title>
-  <meta name="description" content="{{ description }}">
+  <title>{% if title %}{{ title }} - {{ site.title }}{% else %}{{ site.title }}{% if site.subtitle %} - {{ site.subtitle }}{% endif %}{% endif %}</title>
+  <meta name="description" content="{{ description | default(value=site.description) }}">
   <link rel="canonical" href="{{ site.base_url }}/{% if path %}{{ path }}/{% endif %}">
   <link rel="alternate" type="application/rss+xml" title="{{ site.title }}" href="/rss.xml">
-  <meta property="og:type" content="{{ og_type }}">
-  <meta property="og:title" content="{% if title %}{{ title }} · {{ site.title }}{% else %}{{ site.title }}{% endif %}">
-  <meta property="og:description" content="{{ description }}">
+  <meta property="og:type" content="{{ og_type | default(value='website') }}">
+  <meta property="og:title" content="{% if title %}{{ title }}{% else %}{{ site.title }}{% endif %}">
+  <meta property="og:description" content="{{ description | default(value=site.description) }}">
+  <meta property="og:url" content="{{ site.base_url }}/{% if path %}{{ path }}/{% endif %}">
   <meta name="twitter:card" content="summary">
+  <meta name="color-scheme" content="light dark">
   <link rel="stylesheet" href="{{ site.stylesheet_href | safe }}">
 </head>
 <body>
-  <header>
-    <a href="/">{{ site.title }}</a>
-    <nav>
-      {% if theme.nav %}
-      {% for item in theme.nav %}
-      <a href="{{ item.href }}">{{ item.label }}</a>
-      {% endfor %}
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="container">
+      <a class="site-title" href="/">{{ site.title }}</a>
+      {% if menus.main %}
+      <nav aria-label="Main navigation">
+        {% for item in menus.main %}
+        <a href="{{ item.url }}">{{ item.name }}</a>
+        {% endfor %}
+      </nav>
+      {% elif theme.nav %}
+      <nav aria-label="Main navigation">
+        {% for item in theme.nav %}
+        <a href="{{ item.href }}">{{ item.label }}</a>
+        {% endfor %}
+      </nav>
       {% endif %}
-    </nav>
+    </div>
   </header>
-  <main>{{ body | safe }}</main>
-  <footer>
-    <p>&copy; {{ now() | date(format="%Y") }} {{ site.author.name }}</p>
-    {% if theme.footer_links %}
-    <p>
-      {% for link in theme.footer_links %}
-      <a href="{{ link.href }}">{{ link.label }}</a>
-      {% endfor %}
-    </p>
-    {% endif %}
+  <main id="main" class="container">
+    {{ body | safe }}
+  </main>
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <p class="footer-copy">&copy; {{ now() | date(format="%Y") }} {{ site.author.name }}</p>
+      {% if theme.footer_links %}
+      <nav class="footer-nav" aria-label="Footer">
+        {% for link in theme.footer_links %}
+        <a href="{{ link.href }}">{{ link.label }}</a>
+        {% endfor %}
+      </nav>
+      {% endif %}
+      <p class="footer-meta">
+        <a href="/rss.xml" class="rss-link">RSS</a>
+      </p>
+    </div>
   </footer>
 </body>
 </html>

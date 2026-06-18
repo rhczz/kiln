@@ -1,10 +1,29 @@
-<section class="term-list">
-  {% if term.name %}<h1>{{ term.name }}</h1>{% endif %}
+<section class="term-page">
+  <h1 class="term-page-title">{{ term.name }}</h1>
+
   {% if term.pages %}
-  <ul>
+  <ul class="section-list">
     {% for page in term.pages %}
-    <li><a href="{{ page.url }}">{{ page.title }}</a></li>
+    <li class="section-item">
+      <a href="{{ page.url }}" class="section-item-link">
+        <span class="section-item-title">{{ page.title }}</span>
+        {% if page.short_date %}<time datetime="{{ page.iso_date }}" class="section-item-date">{{ page.short_date }}</time>{% endif %}
+      </a>
+      {% if page.description %}<p class="section-item-desc">{{ page.description }}</p>{% endif %}
+    </li>
     {% endfor %}
   </ul>
+  {% endif %}
+
+  {% if paginator and paginator.total_pages > 1 %}
+  <nav class="pagination" aria-label="Pagination">
+    {% if paginator.prev_url %}
+    <a href="{{ paginator.prev_url }}" class="pagination-link pagination-prev" rel="prev">&larr; Previous</a>
+    {% endif %}
+    <span class="pagination-info">Page {{ paginator.current_index }} of {{ paginator.total_pages }}</span>
+    {% if paginator.next_url %}
+    <a href="{{ paginator.next_url }}" class="pagination-link pagination-next" rel="next">Next &rarr;</a>
+    {% endif %}
+  </nav>
   {% endif %}
 </section>
