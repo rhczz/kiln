@@ -168,7 +168,7 @@ pub fn start(
                                     // can restore them if this rebuild fails —
                                     // otherwise the cache would describe the failed
                                     // (half-)build instead of the last successful one.
-                                    let cache_snapshot = cache.snapshot_outputs();
+                                    let cache_snapshot = cache.snapshot();
 
                                     if changed_templates.is_empty() {
                                         // Config/style change → full rebuild
@@ -211,7 +211,7 @@ pub fn start(
                                     // live dir and "current" at staging, so every
                                     // previously-served file would be treated as
                                     // "removed" and deleted from the live output.
-                                    cache.remap_outputs(&resolved, &staging);
+                                    cache.remap_outputs(&output_dir, &staging);
 
                                     let build_result = crate::site::build_with_artifacts(
                                         &config,
@@ -230,7 +230,7 @@ pub fn start(
                                     if let Err(e) = build_result {
                                         // Restore the cache to the last successful
                                         // state and clean up the failed staging build.
-                                        cache.restore_outputs(cache_snapshot);
+                                        cache.restore(cache_snapshot);
                                         remove_owned_dir(&staging);
                                         return Err(e);
                                     }
@@ -422,16 +422,32 @@ fn remove_owned_dir(dir: &Path) {
 
 /// Write the ownership marker into a directory so a later crashed run can
 /// safely recognise and clean it up.
-fn mark_owned(dir: &Path) {
-    let _ = std::fs::write(dir.join(KILN_OWNED_MARKER), "kiln");
+fn mark_owned(dir: &Path) -> std::io::Result<()> {
+    std::fs::write(dir.join(KILN_OWNED_MARKER), "kiln")
+}
+
+fn unmark_owned(dir: &Path) {
+    let _ = std::fs::remove_file(dir.join(KILN_OWNED_MARKER));
 }
 
 /// Prepare a staging directory for a fresh build: remove any previous
 /// kiln-owned staging at that path, then create it with an ownership marker.
 fn prepare_staging(staging: &Path) -> std::io::Result<()> {
-    remove_owned_dir(staging);
+    if staging.exists() {
+        if staging.join(KILN_OWNED_MARKER).exists() {
+            std::fs::remove_dir_all(staging)?;
+        } else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!(
+                    "staging directory already exists and is not owned by kiln: {}",
+                    staging.display()
+                ),
+            ));
+        }
+    }
     std::fs::create_dir_all(staging)?;
-    mark_owned(staging);
+    mark_owned(staging)?;
     Ok(())
 }
 
@@ -448,30 +464,44 @@ fn prepare_staging(staging: &Path) -> std::io::Result<()> {
 /// parent directory, the renames are same-filesystem and atomic on POSIX.
 fn commit_staged_build(staging: &Path, output_dir: &Path) -> std::io::Result<()> {
     let backup = backup_dir(output_dir);
-    // Clear any stale backup left by a previous crashed run. The backup name
-    // is kiln-specific (`.dist.kiln-old`), so it is always safe to remove.
-    if backup.is_dir() {
-        let _ = std::fs::remove_dir_all(&backup);
+    // Clear any stale backup left by a previous crashed run, but only if it
+    // carries kiln's ownership marker.
+    if backup.exists() {
+        if backup.join(KILN_OWNED_MARKER).exists() {
+            std::fs::remove_dir_all(&backup)?;
+        } else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!(
+                    "backup directory already exists and is not owned by kiln: {}",
+                    backup.display()
+                ),
+            ));
+        }
     }
 
     if output_dir.exists() {
         // Move the previous build aside instead of deleting it, so it can be
         // restored if the swap fails.
         std::fs::rename(output_dir, &backup)?;
+        if let Err(e) = mark_owned(&backup) {
+            let _ = std::fs::rename(&backup, output_dir);
+            return Err(e);
+        }
     }
 
     // Move the new build into place. If this fails, restore the old one.
     if let Err(e) = std::fs::rename(staging, output_dir) {
         if backup.exists() {
             let _ = std::fs::rename(&backup, output_dir);
+            unmark_owned(output_dir);
         }
         return Err(e);
     }
+    unmark_owned(output_dir);
 
     // Best-effort cleanup of the parked previous build.
-    if backup.is_dir() {
-        let _ = std::fs::remove_dir_all(&backup);
-    }
+    remove_owned_dir(&backup);
     Ok(())
 }
 
@@ -540,7 +570,7 @@ fn mime_type(path: &std::path::Path) -> String {
 mod tests {
     use super::{
         backup_dir, classify_rebuild, commit_staged_build, prepare_staging, resolve_file,
-        staging_dir, KILN_OWNED_MARKER, RebuildMode,
+        staging_dir, RebuildMode, KILN_OWNED_MARKER,
     };
     use crate::config::{PathsConfig, SiteConfig, SiteMeta};
     use std::collections::HashMap;
@@ -621,14 +651,16 @@ mod tests {
     }
 
     #[test]
-    fn prepare_staging_removes_only_owned_dirs() {
+    fn prepare_staging_refuses_unowned_dirs_and_replaces_owned_dirs() {
         let root = temp_dir("kiln-prepare-staging");
         let staging = staging_dir(&root.join("dist"));
 
-        // An unowned sibling directory (no marker) must NOT be removed.
+        // An unowned sibling directory (no marker) must NOT be removed or
+        // reused as staging.
         std::fs::create_dir_all(&staging).unwrap();
         std::fs::write(staging.join("precious.txt"), "data").unwrap();
-        prepare_staging(&staging).unwrap();
+        let err = prepare_staging(&staging).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
         assert!(
             staging.join("precious.txt").exists(),
             "unowned sibling data must survive prepare_staging"
@@ -670,6 +702,7 @@ mod tests {
         // No staging or backup dirs left behind
         assert!(!staging.exists());
         assert!(!backup_dir(&output).exists());
+        assert!(!output.join(KILN_OWNED_MARKER).exists());
 
         let _ = std::fs::remove_dir_all(root);
     }
@@ -696,6 +729,31 @@ mod tests {
         );
         // No backup left behind
         assert!(!backup_dir(&output).exists());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn commit_staged_build_refuses_unowned_backup_dir() {
+        let root = temp_dir("kiln-commit-unowned-backup");
+        let output = root.join("dist");
+        let backup = backup_dir(&output);
+        let staging = staging_dir(&output);
+
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::write(output.join("index.html"), "old").unwrap();
+        std::fs::create_dir_all(&backup).unwrap();
+        std::fs::write(backup.join("precious.txt"), "data").unwrap();
+        prepare_staging(&staging).unwrap();
+        std::fs::write(staging.join("index.html"), "new").unwrap();
+
+        let err = commit_staged_build(&staging, &output).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            std::fs::read_to_string(output.join("index.html")).unwrap(),
+            "old"
+        );
+        assert!(backup.join("precious.txt").exists());
 
         let _ = std::fs::remove_dir_all(root);
     }
@@ -737,11 +795,7 @@ mod tests {
         std::fs::write(output.join("posts/keep/index.html"), "live").unwrap();
 
         let mut cache = crate::cache::BuildCache::new();
-        cache.replace_page_outputs(
-            [output.join("posts/keep/index.html")]
-                .into_iter()
-                .collect(),
-        );
+        cache.replace_page_outputs([output.join("posts/keep/index.html")].into_iter().collect());
 
         // Simulate the serve orchestration: remap live→staging before building.
         cache.remap_outputs(&output, &staging);
@@ -764,23 +818,54 @@ mod tests {
     }
 
     #[test]
+    fn staged_rebuild_remaps_from_output_path_form_not_resolved_path() {
+        // Regression coverage for symlinked output dirs. The cache stores paths
+        // in the original output path form used by incremental rebuilds; the
+        // staging dir may be computed from a resolved target on another path.
+        let mut cache = crate::cache::BuildCache::new();
+        let output_path_form = Path::new("/workspace/site/dist-link");
+        let resolved_target = Path::new("/mnt/volume/site/dist");
+        let staging = Path::new("/mnt/volume/site/.dist.kiln-staging");
+
+        cache.replace_page_outputs(
+            [output_path_form.join("posts/keep/index.html")]
+                .into_iter()
+                .collect(),
+        );
+
+        cache.remap_outputs(output_path_form, staging);
+        assert!(
+            cache.page_outputs().iter().all(|p| p.starts_with(staging)),
+            "pre-build remap must match the cache's original output path form"
+        );
+
+        cache.remap_outputs(staging, output_path_form);
+        assert!(cache
+            .page_outputs()
+            .contains(&output_path_form.join("posts/keep/index.html")));
+        assert!(!cache
+            .page_outputs()
+            .contains(&resolved_target.join("posts/keep/index.html")));
+    }
+
+    #[test]
     fn cache_snapshot_restore_roundtrips_outputs() {
         let mut cache = crate::cache::BuildCache::new();
-        cache.replace_page_outputs(
-            [PathBuf::from("/dist/a/index.html")].into_iter().collect(),
-        );
+        cache.replace_page_outputs([PathBuf::from("/dist/a/index.html")].into_iter().collect());
         cache.add_public_output(PathBuf::from("/dist/assets/x.css"));
 
-        let snap = cache.snapshot_outputs();
+        let snap = cache.snapshot();
 
         // Mutate the cache (as a failed build would).
         cache.replace_page_outputs(Default::default());
         cache.replace_public_outputs(Default::default());
 
         // Restore.
-        cache.restore_outputs(snap);
+        cache.restore(snap);
 
-        assert!(cache.page_outputs().contains(Path::new("/dist/a/index.html")));
+        assert!(cache
+            .page_outputs()
+            .contains(Path::new("/dist/a/index.html")));
         assert!(cache
             .public_outputs()
             .contains(Path::new("/dist/assets/x.css")));

@@ -17,14 +17,25 @@ pub struct BuildCache {
     cache_misses: Cell<usize>,
 }
 
+#[derive(Clone)]
 struct CachedContent {
     hash: String,
     item: ContentItem,
 }
 
+#[derive(Clone)]
 struct CachedRender {
     hash: String,
     html: String,
+}
+
+pub struct BuildCacheSnapshot {
+    content_items: HashMap<PathBuf, CachedContent>,
+    rendered_pages: HashMap<PathBuf, CachedRender>,
+    rendered_generic: HashMap<String, CachedRender>,
+    copied_public: HashMap<PathBuf, String>,
+    page_outputs: HashSet<PathBuf>,
+    public_outputs: HashSet<PathBuf>,
 }
 
 impl BuildCache {
@@ -168,19 +179,27 @@ impl BuildCache {
         self.public_outputs.insert(output);
     }
 
-    /// Snapshot the page-output and public-output path sets so they can be
-    /// restored if a staged rebuild fails partway through.
-    pub fn snapshot_outputs(&self) -> (HashSet<PathBuf>, HashSet<PathBuf>) {
-        (self.page_outputs.clone(), self.public_outputs.clone())
+    /// Snapshot cache state so it can be restored if a staged rebuild fails
+    /// partway through.
+    pub fn snapshot(&self) -> BuildCacheSnapshot {
+        BuildCacheSnapshot {
+            content_items: self.content_items.clone(),
+            rendered_pages: self.rendered_pages.clone(),
+            rendered_generic: self.rendered_generic.clone(),
+            copied_public: self.copied_public.clone(),
+            page_outputs: self.page_outputs.clone(),
+            public_outputs: self.public_outputs.clone(),
+        }
     }
 
-    /// Restore page-output and public-output path sets from a snapshot.
-    pub fn restore_outputs(
-        &mut self,
-        snapshot: (HashSet<PathBuf>, HashSet<PathBuf>),
-    ) {
-        self.page_outputs = snapshot.0;
-        self.public_outputs = snapshot.1;
+    /// Restore cache state from a snapshot.
+    pub fn restore(&mut self, snapshot: BuildCacheSnapshot) {
+        self.content_items = snapshot.content_items;
+        self.rendered_pages = snapshot.rendered_pages;
+        self.rendered_generic = snapshot.rendered_generic;
+        self.copied_public = snapshot.copied_public;
+        self.page_outputs = snapshot.page_outputs;
+        self.public_outputs = snapshot.public_outputs;
     }
 
     /// Cached render lookup for non-Single pages, keyed by a logical key
@@ -294,10 +313,14 @@ mod tests {
         let staging = Path::new("/srv/site/.dist.staging");
         let output = Path::new("/srv/site/dist");
 
-        cache.replace_page_outputs([
-            staging.join("index.html"),
-            staging.join("posts/hello/index.html"),
-        ].into_iter().collect());
+        cache.replace_page_outputs(
+            [
+                staging.join("index.html"),
+                staging.join("posts/hello/index.html"),
+            ]
+            .into_iter()
+            .collect(),
+        );
         cache.add_public_output(staging.join("assets/styles.abc.css"));
 
         cache.remap_outputs(staging, output);
@@ -325,5 +348,51 @@ mod tests {
         cache.remap_outputs(staging, output);
 
         assert!(cache.page_outputs().contains(&unrelated));
+    }
+
+    #[test]
+    fn snapshot_restore_roundtrips_render_and_output_state() {
+        let mut cache = BuildCache::new();
+        cache.store_render(
+            Path::new("content/posts/demo.md"),
+            "old-hash".to_string(),
+            "<p>old</p>".to_string(),
+        );
+        cache.store_generic_render(
+            "/".to_string(),
+            "generic-hash".to_string(),
+            "<main>home</main>".to_string(),
+        );
+        cache.store_public_hash(PathBuf::from("public/app.css"), "css-hash".to_string());
+        cache.replace_page_outputs([PathBuf::from("/dist/index.html")].into_iter().collect());
+        cache.add_public_output(PathBuf::from("/dist/assets/app.css"));
+
+        let snapshot = cache.snapshot();
+
+        cache.clear_renders();
+        cache.store_render(
+            Path::new("content/posts/demo.md"),
+            "new-hash".to_string(),
+            "<p>new</p>".to_string(),
+        );
+
+        cache.restore(snapshot);
+
+        assert_eq!(
+            cache.cached_render(Path::new("content/posts/demo.md"), "old-hash"),
+            Some("<p>old</p>")
+        );
+        assert_eq!(
+            cache.cached_generic_render("/", "generic-hash"),
+            Some("<main>home</main>")
+        );
+        assert_eq!(
+            cache.copied_public_hash(Path::new("public/app.css")),
+            Some("css-hash")
+        );
+        assert!(cache.page_outputs().contains(Path::new("/dist/index.html")));
+        assert!(cache
+            .public_outputs()
+            .contains(Path::new("/dist/assets/app.css")));
     }
 }
