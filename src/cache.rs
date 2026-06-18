@@ -131,6 +131,24 @@ impl BuildCache {
         self.page_outputs = outputs;
     }
 
+    /// Remap cached output paths (page outputs and public outputs) from
+    /// `from_prefix` to `to_prefix`. Used after a staged build completes so
+    /// that the cache reflects the real output directory, not the temporary
+    /// staging directory.
+    pub fn remap_outputs(&mut self, from_prefix: &Path, to_prefix: &Path) {
+        let remap = |set: &HashSet<PathBuf>| -> HashSet<PathBuf> {
+            set.iter()
+                .map(|p| {
+                    p.strip_prefix(from_prefix)
+                        .map(|rel| to_prefix.join(rel))
+                        .unwrap_or_else(|_| p.clone())
+                })
+                .collect()
+        };
+        self.page_outputs = remap(&self.page_outputs);
+        self.public_outputs = remap(&self.public_outputs);
+    }
+
     pub fn copied_public_hash(&self, path: &Path) -> Option<&str> {
         self.copied_public.get(path).map(|hash| hash.as_str())
     }
@@ -254,5 +272,44 @@ mod tests {
             .cached_render(Path::new("content/posts/missing.md"), "missing")
             .is_none());
         assert_eq!(cache.cache_stats(), (0, 1));
+    }
+
+    #[test]
+    fn remap_outputs_rewrites_staging_paths_for_pages_and_public() {
+        let mut cache = BuildCache::new();
+        let staging = Path::new("/srv/site/.dist.staging");
+        let output = Path::new("/srv/site/dist");
+
+        cache.replace_page_outputs([
+            staging.join("index.html"),
+            staging.join("posts/hello/index.html"),
+        ].into_iter().collect());
+        cache.add_public_output(staging.join("assets/styles.abc.css"));
+
+        cache.remap_outputs(staging, output);
+
+        let page_outputs = cache.page_outputs();
+        assert!(page_outputs.contains(&output.join("index.html")));
+        assert!(page_outputs.contains(&output.join("posts/hello/index.html")));
+        assert!(!page_outputs.iter().any(|p| p.starts_with(staging)));
+
+        let public_outputs = cache.public_outputs();
+        assert!(public_outputs.contains(&output.join("assets/styles.abc.css")));
+        assert!(!public_outputs.iter().any(|p| p.starts_with(staging)));
+    }
+
+    #[test]
+    fn remap_outputs_leaves_unrelated_paths_unchanged() {
+        let mut cache = BuildCache::new();
+        let staging = Path::new("/srv/site/.dist.staging");
+        let output = Path::new("/srv/site/dist");
+
+        // A path that does NOT share the staging prefix should be left as-is.
+        let unrelated = PathBuf::from("/tmp/elsewhere/index.html");
+        cache.replace_page_outputs([unrelated.clone()].into_iter().collect());
+
+        cache.remap_outputs(staging, output);
+
+        assert!(cache.page_outputs().contains(&unrelated));
     }
 }
