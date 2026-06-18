@@ -111,6 +111,7 @@ weight = 1
 | `--output <dir>` | Output directory (default: `dist`) |
 | `--drafts` | Include draft posts in the build |
 | `--profile` | Emit detailed build report with cache and render metrics |
+| `--profile-json` | Emit machine-readable build profile JSON |
 
 ## Build from Source
 

@@ -22,7 +22,7 @@
 - 增量构建，基于内容、模板、资源的感知缓存
 - 内容哈希实现缓存失效
 - 草稿支持
-- 构建分析 (`--profile`)，查看缓存命中率、页面渲染耗时、并行渲染统计
+- 构建分析 (`--profile` / `--profile-json`)，查看缓存命中率、页面渲染耗时、并行渲染统计
 - 结构化诊断，彩色终端输出
 
 ## 快速开始
@@ -40,6 +40,9 @@ kiln build --config site.config.toml --drafts
 
 # 构建并输出性能分析
 kiln build --config site.config.toml --profile
+
+# 构建并输出机器可读性能分析
+kiln build --config site.config.toml --profile-json
 
 # 仅验证配置和内容，不生成输出
 kiln check --config site.config.toml
@@ -132,6 +135,7 @@ weight = 1
 | `--output <dir>` | 输出目录（默认：`dist`） |
 | `--drafts` | 构建时包含草稿文章 |
 | `--profile` | 输出详细构建报告，包含缓存与渲染指标 |
+| `--profile-json` | 输出机器可读的构建性能分析 JSON |
 
 ## 从源码构建
 
