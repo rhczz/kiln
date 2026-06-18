@@ -160,13 +160,27 @@ impl BuildCache {
     pub fn public_outputs(&self) -> &HashSet<PathBuf> {
         &self.public_outputs
     }
-
     pub fn replace_public_outputs(&mut self, outputs: HashSet<PathBuf>) {
         self.public_outputs = outputs;
     }
 
     pub fn add_public_output(&mut self, output: PathBuf) {
         self.public_outputs.insert(output);
+    }
+
+    /// Snapshot the page-output and public-output path sets so they can be
+    /// restored if a staged rebuild fails partway through.
+    pub fn snapshot_outputs(&self) -> (HashSet<PathBuf>, HashSet<PathBuf>) {
+        (self.page_outputs.clone(), self.public_outputs.clone())
+    }
+
+    /// Restore page-output and public-output path sets from a snapshot.
+    pub fn restore_outputs(
+        &mut self,
+        snapshot: (HashSet<PathBuf>, HashSet<PathBuf>),
+    ) {
+        self.page_outputs = snapshot.0;
+        self.public_outputs = snapshot.1;
     }
 
     /// Cached render lookup for non-Single pages, keyed by a logical key
