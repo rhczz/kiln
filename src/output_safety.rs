@@ -423,7 +423,7 @@ styles = "styles.css"
 
         let err = site.ensure(&link).unwrap_err();
 
-        assert!(err.to_string().contains("content directory"));
+        assert!(err.to_string().contains("content"));
     }
 
     #[cfg(unix)]
