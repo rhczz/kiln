@@ -7,23 +7,44 @@ pub(crate) fn ensure_safe_output_target(
     config_base_dir: &Path,
     config: &crate::config::SiteConfig,
 ) -> anyhow::Result<PathBuf> {
-    let output = safe_absolute_path(output)?;
-    let cwd = safe_absolute_path(&std::env::current_dir()?)?;
-    let config_dir = safe_absolute_path(config_base_dir)?;
+    let output = absolute_normalized_path(output)?;
+    let output_check_paths = check_paths(&output)?;
+    let cwd = check_paths(&std::env::current_dir()?)?;
+    let config_dir = check_paths(config_base_dir)?;
 
-    if output == Path::new("/") || output == cwd || output == config_dir {
-        let reason = if output == Path::new("/") {
-            "is the filesystem root"
-        } else if output == cwd {
-            "matches the current working directory"
-        } else {
-            "matches the config directory"
-        };
-        return Err(unsafe_output_error(operation, &output, reason));
+    for check_path in &output_check_paths {
+        if is_filesystem_root(check_path) {
+            return Err(unsafe_output_error(
+                operation,
+                &output,
+                "is the filesystem root",
+            ));
+        }
+        if cwd.iter().any(|cwd_path| check_path == cwd_path) {
+            return Err(unsafe_output_error(
+                operation,
+                &output,
+                "matches the current working directory",
+            ));
+        }
+        if config_dir
+            .iter()
+            .any(|config_dir_path| check_path == config_dir_path)
+        {
+            return Err(unsafe_output_error(
+                operation,
+                &output,
+                "matches the config directory",
+            ));
+        }
     }
 
-    if let Some(home) = std::env::var_os("HOME") {
-        if output == safe_absolute_path(Path::new(&home))? {
+    for home in home_dirs()? {
+        let home_paths = check_paths(&home)?;
+        if output_check_paths
+            .iter()
+            .any(|output| home_paths.iter().any(|home| output == home))
+        {
             return Err(unsafe_output_error(
                 operation,
                 &output,
@@ -33,7 +54,10 @@ pub(crate) fn ensure_safe_output_target(
     }
 
     for (label, protected) in protected_site_paths(config_path, config)? {
-        if paths_overlap(&output, &protected) {
+        if output_check_paths
+            .iter()
+            .any(|output| paths_overlap(output, &protected))
+        {
             return Err(unsafe_output_error(
                 operation,
                 &output,
@@ -49,47 +73,59 @@ fn protected_site_paths(
     config_path: &Path,
     config: &crate::config::SiteConfig,
 ) -> anyhow::Result<Vec<(&'static str, PathBuf)>> {
-    Ok(vec![
-        ("config file", safe_absolute_path(config_path)?),
+    let config_path = absolute_normalized_path(config_path)?;
+    let config_base_dir = config_path.parent().unwrap_or(Path::new("."));
+    let mut paths = vec![
+        ("config file", canonical_check_path(&config_path)?),
         (
             "content directory",
-            safe_absolute_path(Path::new(&config.paths.content))?,
+            canonical_check_path(Path::new(&config.paths.content))?,
         ),
         (
             "templates directory",
-            safe_absolute_path(Path::new(&config.paths.templates))?,
+            canonical_check_path(Path::new(&config.paths.templates))?,
         ),
         (
             "public directory",
-            safe_absolute_path(Path::new(&config.paths.public))?,
+            canonical_check_path(Path::new(&config.paths.public))?,
         ),
         (
             "styles file",
-            safe_absolute_path(Path::new(&config.paths.styles))?,
+            canonical_check_path(Path::new(&config.paths.styles))?,
         ),
-    ])
+    ];
+
+    for (label, raw_path) in raw_site_paths(&config_path, config_base_dir)? {
+        paths.push((label, raw_path));
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
 }
 
-fn safe_absolute_path(path: &Path) -> anyhow::Result<PathBuf> {
+fn absolute_normalized_path(path: &Path) -> anyhow::Result<PathBuf> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
         std::env::current_dir()?.join(path)
     };
-    let absolute = normalize_path(&absolute);
+    Ok(normalize_path(&absolute))
+}
 
-    if let Ok(canonical) = std::fs::canonicalize(&absolute) {
+fn canonical_check_path(path: &Path) -> anyhow::Result<PathBuf> {
+    let path = absolute_normalized_path(path)?;
+    if let Ok(canonical) = std::fs::canonicalize(&path) {
         return Ok(canonical);
     }
 
-    let mut existing = absolute.as_path();
+    let mut existing = path.as_path();
     let mut missing = Vec::new();
     while !existing.exists() {
         if let Some(name) = existing.file_name() {
             missing.push(name.to_os_string());
         }
         let Some(parent) = existing.parent() else {
-            return Ok(absolute);
+            return Ok(path);
         };
         existing = parent;
     }
@@ -99,6 +135,56 @@ fn safe_absolute_path(path: &Path) -> anyhow::Result<PathBuf> {
         canonical.push(component);
     }
     Ok(canonical)
+}
+
+fn check_paths(path: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    let normalized = absolute_normalized_path(path)?;
+    let canonical = canonical_check_path(&normalized)?;
+    if canonical == normalized {
+        Ok(vec![normalized])
+    } else {
+        Ok(vec![normalized, canonical])
+    }
+}
+
+fn raw_site_paths(
+    config_path: &Path,
+    config_base_dir: &Path,
+) -> anyhow::Result<Vec<(&'static str, PathBuf)>> {
+    #[derive(serde::Deserialize)]
+    struct RawConfig {
+        #[serde(default)]
+        paths: crate::config::PathsConfig,
+    }
+
+    let content = std::fs::read_to_string(config_path)?;
+    let raw: RawConfig = toml::from_str(&content)?;
+    Ok(vec![
+        (
+            "configured content path",
+            absolute_normalized_from(config_base_dir, Path::new(&raw.paths.content)),
+        ),
+        (
+            "configured templates path",
+            absolute_normalized_from(config_base_dir, Path::new(&raw.paths.templates)),
+        ),
+        (
+            "configured public path",
+            absolute_normalized_from(config_base_dir, Path::new(&raw.paths.public)),
+        ),
+        (
+            "configured styles path",
+            absolute_normalized_from(config_base_dir, Path::new(&raw.paths.styles)),
+        ),
+    ])
+}
+
+fn absolute_normalized_from(base: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        normalize_path(path)
+    } else {
+        normalize_path(&base.join(path))
+    }
 }
 
 fn normalize_path(path: &Path) -> PathBuf {
@@ -115,6 +201,29 @@ fn normalize_path(path: &Path) -> PathBuf {
         }
     }
     normalized
+}
+
+fn is_filesystem_root(path: &Path) -> bool {
+    path.components()
+        .all(|component| !matches!(component, Component::Normal(_)))
+}
+
+fn home_dirs() -> anyhow::Result<Vec<PathBuf>> {
+    let mut dirs = Vec::new();
+    for key in ["HOME", "USERPROFILE"] {
+        if let Some(value) = std::env::var_os(key) {
+            dirs.push(absolute_normalized_path(Path::new(&value))?);
+        }
+    }
+    if let (Some(drive), Some(path)) = (std::env::var_os("HOMEDRIVE"), std::env::var_os("HOMEPATH"))
+    {
+        let mut home = PathBuf::from(drive);
+        home.push(path);
+        dirs.push(absolute_normalized_path(&home)?);
+    }
+    dirs.sort();
+    dirs.dedup();
+    Ok(dirs)
 }
 
 fn paths_overlap(a: &Path, b: &Path) -> bool {
@@ -193,8 +302,10 @@ styles = "styles.css"
             &self.base_dir
         }
 
-        fn canonical_site_dir(&self) -> PathBuf {
-            std::fs::canonicalize(&self.base_dir).unwrap()
+        fn reload_config(&mut self) {
+            let (config, base_dir) = crate::config::SiteConfig::load(&self.config_path).unwrap();
+            self.config = config;
+            self.base_dir = base_dir;
         }
 
         fn ensure(&self, output: &Path) -> anyhow::Result<PathBuf> {
@@ -214,7 +325,7 @@ styles = "styles.css"
 
         let output = site.ensure(&site.site_dir().join("dist")).unwrap();
 
-        assert_eq!(output, site.canonical_site_dir().join("dist"));
+        assert_eq!(output, site.site_dir().join("dist"));
     }
 
     #[test]
@@ -226,7 +337,7 @@ styles = "styles.css"
             .ensure(&site.site_dir().join("nested/../dist"))
             .unwrap();
 
-        assert_eq!(output, site.canonical_site_dir().join("dist"));
+        assert_eq!(output, site.site_dir().join("dist"));
     }
 
     #[test]
@@ -274,7 +385,7 @@ styles = "styles.css"
 
         let err = site.ensure(&site.site_dir().join("content")).unwrap_err();
 
-        assert!(err.to_string().contains("content directory"));
+        assert!(err.to_string().contains("content"));
     }
 
     #[test]
@@ -285,7 +396,22 @@ styles = "styles.css"
             .ensure(&site.site_dir().join("content/generated"))
             .unwrap_err();
 
-        assert!(err.to_string().contains("content directory"));
+        assert!(err.to_string().contains("content"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preserves_symlink_output_path_when_target_is_safe() {
+        let site = TestSite::new("symlink-output");
+        let safe_target = site.root.join("external-output");
+        std::fs::create_dir_all(&safe_target).unwrap();
+        let link = site.site_dir().join("dist-link");
+        std::os::unix::fs::symlink(&safe_target, &link).unwrap();
+
+        let output = site.ensure(&link).unwrap();
+
+        assert_eq!(output, link);
+        assert_ne!(output, std::fs::canonicalize(safe_target).unwrap());
     }
 
     #[cfg(unix)]
@@ -298,5 +424,39 @@ styles = "styles.css"
         let err = site.ensure(&link).unwrap_err();
 
         assert!(err.to_string().contains("content directory"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_parent_of_raw_configured_symlink_source_path() {
+        let mut site = TestSite::new("raw-symlink-source");
+        let external_content = site.root.join("external-content");
+        std::fs::create_dir_all(&external_content).unwrap();
+        std::fs::create_dir_all(site.site_dir().join("sources")).unwrap();
+        std::os::unix::fs::symlink(
+            &external_content,
+            site.site_dir().join("sources/content-link"),
+        )
+        .unwrap();
+        std::fs::write(
+            &site.config_path,
+            r#"[site]
+title = "Output Safety"
+description = "Output safety fixture"
+base_url = "https://safety.test"
+
+[paths]
+content = "sources/content-link"
+templates = "templates"
+public = "public"
+styles = "styles.css"
+"#,
+        )
+        .unwrap();
+        site.reload_config();
+
+        let err = site.ensure(&site.site_dir().join("sources")).unwrap_err();
+
+        assert!(err.to_string().contains("configured content path"));
     }
 }
