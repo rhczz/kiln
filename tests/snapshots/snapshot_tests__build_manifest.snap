@@ -3,7 +3,7 @@ source: tests/snapshot_tests.rs
 expression: sorted
 ---
 {
-  "config_hash": "c53ba8ef0158",
+  "config_hash": "5c873c474c35",
   "entries": [
     {
       "content_hash": "404.html",

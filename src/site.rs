@@ -6,7 +6,7 @@ use crate::content::{self, ContentItem};
 use crate::engine::Engine;
 use crate::model;
 use crate::timing::BuildTimer;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 pub fn build(
@@ -161,7 +161,7 @@ pub fn build_with_artifacts(
         items
     };
 
-    let config_hash = build_config_hash(config);
+    let config_hash = build_config_hash(config, &artifacts.style_asset);
     let asset_hash = asset_manifest.content_hash();
     // Update the engine's asset_url function with the current manifest
     artifacts
@@ -1374,31 +1374,85 @@ fn template_deps_hash(engine: &Engine, deps: &[String]) -> String {
     crate::content::fingerprint(combined.as_bytes())
 }
 
-fn build_config_hash(config: &SiteConfig) -> String {
-    let mut parts = vec![
-        config.site.title.clone(),
-        config.site.subtitle.clone(),
-        config.site.description.clone(),
-        config.site.language.clone(),
-        config.site.base_url.clone(),
-        config.paginate_by.to_string(),
-        config.paginate_path.clone(),
-    ];
-
-    for collection in &config.collections {
-        parts.push(collection.name.clone());
-        parts.push(collection.directory.clone());
-        parts.push(collection.route.clone());
-        parts.push(collection.template.clone());
-    }
-
-    for taxonomy in &config.taxonomies {
-        parts.push(taxonomy.name.clone());
-        parts.push(taxonomy.slug.clone());
-        parts.push(taxonomy.template.clone());
-    }
-
-    content::fingerprint(parts.join("|").as_bytes())
+fn build_config_hash(config: &SiteConfig, style_asset: &StyleAsset) -> String {
+    let collections: Vec<serde_json::Value> = site_config::effective_collections(config)
+        .into_iter()
+        .map(|collection| {
+            serde_json::json!({
+                "name": collection.name,
+                "directory": collection.directory,
+                "route": collection.route,
+                "template": collection.template,
+                "date_ordered": collection.date_ordered,
+                "feed": collection.feed,
+            })
+        })
+        .collect();
+    let taxonomies: Vec<serde_json::Value> = site_config::effective_taxonomies(config)
+        .into_iter()
+        .map(|taxonomy| {
+            let slug = taxonomy.effective_slug().to_string();
+            serde_json::json!({
+                "name": taxonomy.name,
+                "slug": slug,
+                "template": taxonomy.template,
+            })
+        })
+        .collect();
+    let menus: BTreeMap<String, Vec<serde_json::Value>> = config
+        .menus
+        .iter()
+        .map(|(name, items)| {
+            let mut sorted = items.clone();
+            sorted.sort_by_key(|item| item.weight);
+            let entries = sorted
+                .into_iter()
+                .map(|item| {
+                    serde_json::json!({
+                        "name": item.name,
+                        "url": item.url,
+                        "weight": item.weight,
+                    })
+                })
+                .collect();
+            (name.clone(), entries)
+        })
+        .collect();
+    let theme = serde_json::to_value(&config.extra)
+        .expect("toml::Value -> serde_json::Value is infallible");
+    let effective = serde_json::json!({
+        "site": {
+            "title": config.site.title,
+            "subtitle": config.site.subtitle,
+            "description": config.site.description,
+            "language": config.site.language,
+            "base_url": config.site.base_url,
+        },
+        "author": config.author.as_ref().map(|author| {
+            serde_json::json!({
+                "name": author.name,
+                "email": author.email,
+            })
+        }),
+        "feed": {
+            "item_count": config.feed.item_count,
+        },
+        "collections": collections,
+        "taxonomies": taxonomies,
+        "pagination": {
+            "paginate_by": config.paginate_by,
+            "paginate_path": config.paginate_path,
+        },
+        "menus": menus,
+        "theme": theme,
+        "stylesheet": {
+            "href": style_asset.href,
+            "content_hash": content::fingerprint(&style_asset.content),
+        },
+    });
+    let bytes =
+        serde_json::to_vec(&effective).expect("serde_json::Value serialization is infallible");
+    content::fingerprint(&bytes)
 }
 
 fn wrap_with_layout(
@@ -1622,13 +1676,96 @@ fn rewrite_404_stylesheet(output_dir: &Path, style_asset: &StyleAsset) -> anyhow
 
 #[cfg(test)]
 mod tests {
-    use super::{build, derive_paginate_base, prune_removed_outputs, section_context};
-    use crate::config::{AuthorConfig, FeedConfig, PathsConfig, SiteConfig, SiteMeta};
+    use super::{
+        build, build_config_hash, derive_paginate_base, prune_removed_outputs, section_context,
+        StyleAsset,
+    };
+    use crate::config::{
+        AuthorConfig, FeedConfig, MenuItemConfig, PathsConfig, SiteConfig, SiteMeta,
+    };
     use crate::content::ContentItem;
     use crate::model::{BreadcrumbItem, Section};
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn config_hash_covers_template_visible_config_and_stylesheet() {
+        let mut config = SiteConfig {
+            paths: PathsConfig {
+                content: ".".into(),
+                templates: ".".into(),
+                public: ".".into(),
+                styles: "styles.css".into(),
+            },
+            site: SiteMeta {
+                title: "Test".into(),
+                subtitle: "Sub".into(),
+                description: "Desc".into(),
+                language: "en".into(),
+                base_url: "https://example.com".into(),
+            },
+            author: Some(AuthorConfig {
+                name: "Tester".into(),
+                email: "test@example.com".into(),
+            }),
+            feed: FeedConfig { item_count: 20 },
+            collections: vec![],
+            taxonomies: vec![],
+            paginate_by: 0,
+            paginate_path: "page".into(),
+            menus: Default::default(),
+            extra: toml::Value::Table(
+                vec![("intro".into(), toml::Value::String("Hello".into()))]
+                    .into_iter()
+                    .collect(),
+            ),
+        };
+        config.menus.insert(
+            "main".into(),
+            vec![MenuItemConfig {
+                name: "Home".into(),
+                url: "/".into(),
+                weight: 1,
+            }],
+        );
+        let style = StyleAsset {
+            href: "/assets/styles.aaaa.css".into(),
+            output_path: "assets/styles.aaaa.css".into(),
+            content: b"body { color: red; }".to_vec(),
+        };
+        let baseline = build_config_hash(&config, &style);
+
+        let mut changed_author = config.clone();
+        changed_author.author = Some(AuthorConfig {
+            name: "Other".into(),
+            email: "other@example.com".into(),
+        });
+        assert_ne!(baseline, build_config_hash(&changed_author, &style));
+
+        let mut changed_feed = config.clone();
+        changed_feed.feed.item_count = 5;
+        assert_ne!(baseline, build_config_hash(&changed_feed, &style));
+
+        let mut changed_menu = config.clone();
+        changed_menu.menus.get_mut("main").unwrap()[0].url = "/start/".into();
+        assert_ne!(baseline, build_config_hash(&changed_menu, &style));
+
+        let mut changed_theme = config.clone();
+        changed_theme.extra = toml::Value::Table(
+            vec![("intro".into(), toml::Value::String("Goodbye".into()))]
+                .into_iter()
+                .collect(),
+        );
+        assert_ne!(baseline, build_config_hash(&changed_theme, &style));
+
+        let changed_style = StyleAsset {
+            href: "/assets/styles.bbbb.css".into(),
+            output_path: "assets/styles.bbbb.css".into(),
+            content: b"body { color: blue; }".to_vec(),
+        };
+        assert_ne!(baseline, build_config_hash(&config, &changed_style));
+    }
 
     #[test]
     fn builds_fixture_with_hashed_styles_and_default_templates() {
