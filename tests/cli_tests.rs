@@ -323,6 +323,70 @@ fn build_rejects_profile_and_profile_json_together() {
 }
 
 #[test]
+fn build_refuses_output_at_site_source_directory() {
+    let fixture = CliFixture::new("build-source-output");
+    fixture.write_profile_site();
+    let source_file = fixture.root().join("content/posts/2026-06-01-profile.md");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_kiln"))
+        .arg("build")
+        .arg("--config")
+        .arg(fixture.root().join("site.config.toml"))
+        .arg("--output")
+        .arg(fixture.root().join("content"))
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "kiln build should refuse source output\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Refusing to build into unsafe output path"),
+        "{stderr}"
+    );
+    assert!(
+        source_file.is_file(),
+        "build must not delete source content"
+    );
+}
+
+#[test]
+fn build_refuses_output_nested_inside_site_source_directory() {
+    let fixture = CliFixture::new("build-nested-source-output");
+    fixture.write_profile_site();
+    let nested_output = fixture.root().join("content/generated");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_kiln"))
+        .arg("build")
+        .arg("--config")
+        .arg(fixture.root().join("site.config.toml"))
+        .arg("--output")
+        .arg(&nested_output)
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "kiln build should refuse nested source output\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Refusing to build into unsafe output path"),
+        "{stderr}"
+    );
+    assert!(
+        !nested_output.exists(),
+        "build must not write inside source content"
+    );
+}
+
+#[test]
 fn init_creates_a_site_that_builds() {
     let fixture = CliFixture::new("init");
     let site_dir = fixture.root().join("my-site");
