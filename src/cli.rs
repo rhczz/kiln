@@ -1760,4 +1760,3 @@ impl Drop for TempDirGuard {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
-
