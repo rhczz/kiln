@@ -16,7 +16,14 @@ pub fn start(
     output_dir: &std::path::Path,
     port: u16,
 ) -> anyhow::Result<()> {
-    let (config, _base_dir) = crate::config::SiteConfig::load(config_path)?;
+    let (config, base_dir) = crate::config::SiteConfig::load(config_path)?;
+    let output_dir = crate::output_safety::ensure_safe_output_target(
+        "serve",
+        output_dir,
+        config_path,
+        &base_dir,
+        &config,
+    )?;
     let mut artifacts = crate::site::BuildArtifacts::load(&config)?;
 
     let mut prefixes = collection_prefixes(&config);
@@ -26,7 +33,7 @@ pub fn start(
     println!("Building site...");
     crate::site::build_with_artifacts(
         &config,
-        output_dir,
+        &output_dir,
         Some(&mut cache),
         &artifacts,
         crate::site::BuildOptions {
@@ -122,12 +129,19 @@ pub fn start(
                 // No new changes, rebuild if needed
                 if let Some(mode) = pending_mode.take() {
                     println!("Changes detected, rebuilding...");
-                    let rebuild =
-                        crate::config::SiteConfig::load(config_path).and_then(|(config, _)| {
+                    let rebuild = crate::config::SiteConfig::load(config_path).and_then(
+                        |(config, base_dir)| {
+                            let output_dir = crate::output_safety::ensure_safe_output_target(
+                                "serve",
+                                &output_dir,
+                                config_path,
+                                &base_dir,
+                                &config,
+                            )?;
                             match mode {
                                 RebuildMode::Content => crate::site::build_with_artifacts(
                                     &config,
-                                    output_dir,
+                                    &output_dir,
                                     Some(&mut cache),
                                     &artifacts,
                                     crate::site::BuildOptions {
@@ -139,7 +153,11 @@ pub fn start(
                                     },
                                 ),
                                 RebuildMode::Public => crate::site::build_public_incremental(
-                                    &config, output_dir, false, &mut cache, &artifacts,
+                                    &config,
+                                    &output_dir,
+                                    false,
+                                    &mut cache,
+                                    &artifacts,
                                 ),
                                 RebuildMode::Full { changed_templates } => {
                                     // Reload artifacts first (templates may have changed)
@@ -151,7 +169,7 @@ pub fn start(
                                         cache.clear_renders();
                                     } else {
                                         // Template-only change → selective invalidation
-                                        let manifest = crate::BuildManifest::load(output_dir)
+                                        let manifest = crate::BuildManifest::load(&output_dir)
                                             .unwrap_or_default();
                                         let mut deps_map: std::collections::HashMap<
                                             std::path::PathBuf,
@@ -170,7 +188,7 @@ pub fn start(
 
                                     crate::site::build_with_artifacts(
                                         &config,
-                                        output_dir,
+                                        &output_dir,
                                         Some(&mut cache),
                                         &artifacts,
                                         crate::site::BuildOptions {
@@ -183,7 +201,8 @@ pub fn start(
                                     )
                                 }
                             }
-                        });
+                        },
+                    );
                     if let Err(e) = rebuild {
                         eprintln!("Build error: {:#}", e);
                         eprintln!("Continuing to serve the last successful build");
@@ -204,7 +223,7 @@ pub fn start(
                 .unwrap_or("")
                 .trim_start_matches('/')
                 .to_string();
-            serve_file(request, output_dir, &path, &prefixes);
+            serve_file(request, &output_dir, &path, &prefixes);
         }
     }
 

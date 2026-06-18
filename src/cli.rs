@@ -94,6 +94,13 @@ pub fn run() -> anyhow::Result<()> {
             profile_json,
         } => {
             let (site_config, _base_dir) = crate::config::SiteConfig::load(&config)?;
+            let output = crate::output_safety::ensure_safe_output_target(
+                "build",
+                &output,
+                &config,
+                &_base_dir,
+                &site_config,
+            )?;
             if profile_json {
                 let artifacts = crate::site::BuildArtifacts::load(&site_config)?;
                 let mut cache = crate::BuildCache::new();

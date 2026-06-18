@@ -7,6 +7,7 @@ mod diagnostic;
 mod engine;
 mod manifest;
 mod model;
+mod output_safety;
 mod paginator;
 mod render;
 mod rss;
