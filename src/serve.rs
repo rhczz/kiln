@@ -164,6 +164,12 @@ pub fn start(
                                     artifacts = crate::site::BuildArtifacts::load(&config)?;
                                     prefixes = collection_prefixes(&config);
 
+                                    // Snapshot the cache's output-path sets so we
+                                    // can restore them if this rebuild fails —
+                                    // otherwise the cache would describe the failed
+                                    // (half-)build instead of the last successful one.
+                                    let cache_snapshot = cache.snapshot();
+
                                     if changed_templates.is_empty() {
                                         // Config/style change → full rebuild
                                         cache.clear_renders();
@@ -186,9 +192,30 @@ pub fn start(
                                         }
                                     }
 
-                                    crate::site::build_with_artifacts(
+                                    // Resolve symlinked output to its real target so
+                                    // the staging/backup siblings share the target's
+                                    // filesystem (avoids EXDEV on rename).
+                                    let resolved = resolve_output_for_swap(&output_dir);
+
+                                    // Build into a staging directory so that if
+                                    // template rendering fails partway through, the
+                                    // previous successful build remains intact.
+                                    let staging = staging_dir(&resolved);
+                                    prepare_staging(&staging)?;
+
+                                    // Remap cached output paths from the live output
+                                    // dir to the staging dir *before* building.
+                                    // build_with_artifacts runs prune_removed_outputs
+                                    // internally, diffing previous vs current outputs.
+                                    // Without this remap, "previous" points at the
+                                    // live dir and "current" at staging, so every
+                                    // previously-served file would be treated as
+                                    // "removed" and deleted from the live output.
+                                    cache.remap_outputs(&output_dir, &staging);
+
+                                    let build_result = crate::site::build_with_artifacts(
                                         &config,
-                                        &output_dir,
+                                        &staging,
                                         Some(&mut cache),
                                         &artifacts,
                                         crate::site::BuildOptions {
@@ -198,7 +225,30 @@ pub fn start(
                                             profile: false,
                                             profile_json: false,
                                         },
-                                    )
+                                    );
+
+                                    if let Err(e) = build_result {
+                                        // Restore the cache to the last successful
+                                        // state and clean up the failed staging build.
+                                        cache.restore(cache_snapshot);
+                                        remove_owned_dir(&staging);
+                                        return Err(e);
+                                    }
+
+                                    // Atomically swap the staged build into place.
+                                    // The previous output is moved aside (not
+                                    // deleted) and restored if the swap fails.
+                                    commit_staged_build(&staging, &resolved)?;
+
+                                    // Remap cache output paths back to the live
+                                    // output_dir (the symlink path, NOT the resolved
+                                    // canonical path) so they match the path form
+                                    // used by subsequent Content/Public rebuilds —
+                                    // otherwise a later rebuild's prune diff would
+                                    // treat every cached path as removed.
+                                    cache.remap_outputs(&staging, &output_dir);
+
+                                    Ok(())
                                 }
                             }
                         },
@@ -336,6 +386,125 @@ fn serve_file(
     }
 }
 
+/// Marker file written into staging/backup directories so kiln only removes
+/// directories it created itself — never unrelated sibling data.
+const KILN_OWNED_MARKER: &str = ".kiln-staged-build";
+
+/// Resolve a symlinked output path to its real location so that the
+/// staging/backup siblings sit on the same filesystem as the actual
+/// target (required for an atomic `rename`).
+fn resolve_output_for_swap(output_dir: &Path) -> PathBuf {
+    std::fs::canonicalize(output_dir).unwrap_or_else(|_| output_dir.to_path_buf())
+}
+
+/// Returns a staging directory path for an output directory.
+/// `output_dir` should already be resolved (canonicalized) so the staging
+/// directory is a sibling of the real target, not of a symlink.
+fn staging_dir(output_dir: &Path) -> PathBuf {
+    let name = output_dir.file_name().unwrap_or_default().to_string_lossy();
+    output_dir.with_file_name(format!(".{}.kiln-staging", name))
+}
+
+/// Path used to park the previous output while the new one is swapped in.
+fn backup_dir(output_dir: &Path) -> PathBuf {
+    let name = output_dir.file_name().unwrap_or_default().to_string_lossy();
+    output_dir.with_file_name(format!(".{}.kiln-old", name))
+}
+
+/// Remove `dir` only if it is a kiln-owned staging/backup directory
+/// (contains the marker file). This avoids deleting unowned sibling data
+/// that merely happens to share the staging name.
+fn remove_owned_dir(dir: &Path) {
+    if dir.is_dir() && dir.join(KILN_OWNED_MARKER).exists() {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// Write the ownership marker into a directory so a later crashed run can
+/// safely recognise and clean it up.
+fn mark_owned(dir: &Path) -> std::io::Result<()> {
+    std::fs::write(dir.join(KILN_OWNED_MARKER), "kiln")
+}
+
+fn unmark_owned(dir: &Path) {
+    let _ = std::fs::remove_file(dir.join(KILN_OWNED_MARKER));
+}
+
+/// Prepare a staging directory for a fresh build: remove any previous
+/// kiln-owned staging at that path, then create it with an ownership marker.
+fn prepare_staging(staging: &Path) -> std::io::Result<()> {
+    if staging.exists() {
+        if staging.join(KILN_OWNED_MARKER).exists() {
+            std::fs::remove_dir_all(staging)?;
+        } else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!(
+                    "staging directory already exists and is not owned by kiln: {}",
+                    staging.display()
+                ),
+            ));
+        }
+    }
+    std::fs::create_dir_all(staging)?;
+    mark_owned(staging)?;
+    Ok(())
+}
+
+/// Atomically replace `output_dir` with `staging`.
+///
+/// Uses the move-aside pattern: the old output is *renamed* aside (not
+/// deleted) before the staging directory is renamed into place. This avoids
+/// the window where `output_dir` is empty if the second rename fails — if the
+/// swap fails, the old output is restored.
+///
+/// `output_dir` must already be resolved (canonicalized) so that the
+/// staging/backup siblings share its filesystem (otherwise `rename` would
+/// fail with `EXDEV`). Because all three paths are siblings under the same
+/// parent directory, the renames are same-filesystem and atomic on POSIX.
+fn commit_staged_build(staging: &Path, output_dir: &Path) -> std::io::Result<()> {
+    let backup = backup_dir(output_dir);
+    // Clear any stale backup left by a previous crashed run, but only if it
+    // carries kiln's ownership marker.
+    if backup.exists() {
+        if backup.join(KILN_OWNED_MARKER).exists() {
+            std::fs::remove_dir_all(&backup)?;
+        } else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!(
+                    "backup directory already exists and is not owned by kiln: {}",
+                    backup.display()
+                ),
+            ));
+        }
+    }
+
+    if output_dir.exists() {
+        // Move the previous build aside instead of deleting it, so it can be
+        // restored if the swap fails.
+        std::fs::rename(output_dir, &backup)?;
+        if let Err(e) = mark_owned(&backup) {
+            let _ = std::fs::rename(&backup, output_dir);
+            return Err(e);
+        }
+    }
+
+    // Move the new build into place. If this fails, restore the old one.
+    if let Err(e) = std::fs::rename(staging, output_dir) {
+        if backup.exists() {
+            let _ = std::fs::rename(&backup, output_dir);
+            unmark_owned(output_dir);
+        }
+        return Err(e);
+    }
+    unmark_owned(output_dir);
+
+    // Best-effort cleanup of the parked previous build.
+    remove_owned_dir(&backup);
+    Ok(())
+}
+
 fn collection_prefixes(config: &crate::config::SiteConfig) -> Vec<String> {
     let collections = if config.collections.is_empty() {
         crate::config::default_collections()
@@ -399,7 +568,10 @@ fn mime_type(path: &std::path::Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_rebuild, resolve_file, RebuildMode};
+    use super::{
+        backup_dir, classify_rebuild, commit_staged_build, prepare_staging, resolve_file,
+        staging_dir, RebuildMode, KILN_OWNED_MARKER,
+    };
     use crate::config::{PathsConfig, SiteConfig, SiteMeta};
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -466,6 +638,237 @@ mod tests {
         if let RebuildMode::Full { changed_templates } = &mode {
             assert_eq!(changed_templates, &vec!["post.html".to_string()]);
         }
+    }
+
+    #[test]
+    fn staging_dir_is_a_hidden_sibling_of_output() {
+        let output = Path::new("/srv/site/dist");
+        assert_eq!(
+            staging_dir(output),
+            Path::new("/srv/site/.dist.kiln-staging")
+        );
+        assert_eq!(backup_dir(output), Path::new("/srv/site/.dist.kiln-old"));
+    }
+
+    #[test]
+    fn prepare_staging_refuses_unowned_dirs_and_replaces_owned_dirs() {
+        let root = temp_dir("kiln-prepare-staging");
+        let staging = staging_dir(&root.join("dist"));
+
+        // An unowned sibling directory (no marker) must NOT be removed or
+        // reused as staging.
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::write(staging.join("precious.txt"), "data").unwrap();
+        let err = prepare_staging(&staging).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert!(
+            staging.join("precious.txt").exists(),
+            "unowned sibling data must survive prepare_staging"
+        );
+
+        // Now mark it owned and re-run — it should be replaced.
+        std::fs::write(staging.join(KILN_OWNED_MARKER), "kiln").unwrap();
+        prepare_staging(&staging).unwrap();
+        assert!(!staging.join("precious.txt").exists());
+        assert!(staging.join(KILN_OWNED_MARKER).exists());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn commit_staged_build_swaps_new_output_into_place() {
+        let root = temp_dir("kiln-commit-swap");
+        let output = root.join("dist");
+        let staging = staging_dir(&output);
+
+        // Seed an existing successful build
+        std::fs::create_dir_all(output.join("posts/old")).unwrap();
+        std::fs::write(output.join("posts/old/index.html"), "old").unwrap();
+
+        // Build the new output in staging (with ownership marker)
+        prepare_staging(&staging).unwrap();
+        std::fs::create_dir_all(staging.join("posts/new")).unwrap();
+        std::fs::write(staging.join("posts/new/index.html"), "new").unwrap();
+
+        commit_staged_build(&staging, &output).unwrap();
+
+        // New content is live
+        assert_eq!(
+            std::fs::read_to_string(output.join("posts/new/index.html")).unwrap(),
+            "new"
+        );
+        // Old content was replaced (Full rebuild deletes everything)
+        assert!(!output.join("posts/old/index.html").exists());
+        // No staging or backup dirs left behind
+        assert!(!staging.exists());
+        assert!(!backup_dir(&output).exists());
+        assert!(!output.join(KILN_OWNED_MARKER).exists());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn commit_staged_build_restores_old_output_if_swap_fails() {
+        let root = temp_dir("kiln-commit-restore");
+        let output = root.join("dist");
+        let staging = staging_dir(&output);
+
+        // Seed an existing successful build
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::write(output.join("index.html"), "old-build").unwrap();
+
+        // staging does not exist → the swap rename fails and commit must
+        // restore the previous output.
+        let result = commit_staged_build(&staging, &output);
+        assert!(result.is_err());
+
+        // Old output is intact
+        assert_eq!(
+            std::fs::read_to_string(output.join("index.html")).unwrap(),
+            "old-build"
+        );
+        // No backup left behind
+        assert!(!backup_dir(&output).exists());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn commit_staged_build_refuses_unowned_backup_dir() {
+        let root = temp_dir("kiln-commit-unowned-backup");
+        let output = root.join("dist");
+        let backup = backup_dir(&output);
+        let staging = staging_dir(&output);
+
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::write(output.join("index.html"), "old").unwrap();
+        std::fs::create_dir_all(&backup).unwrap();
+        std::fs::write(backup.join("precious.txt"), "data").unwrap();
+        prepare_staging(&staging).unwrap();
+        std::fs::write(staging.join("index.html"), "new").unwrap();
+
+        let err = commit_staged_build(&staging, &output).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            std::fs::read_to_string(output.join("index.html")).unwrap(),
+            "old"
+        );
+        assert!(backup.join("precious.txt").exists());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn commit_staged_build_creates_output_when_none_exists() {
+        let root = temp_dir("kiln-commit-first");
+        let output = root.join("dist");
+        let staging = staging_dir(&output);
+
+        // No existing output — first successful rebuild
+        prepare_staging(&staging).unwrap();
+        std::fs::write(staging.join("index.html"), "first").unwrap();
+
+        commit_staged_build(&staging, &output).unwrap();
+
+        assert!(output.is_dir());
+        assert_eq!(
+            std::fs::read_to_string(output.join("index.html")).unwrap(),
+            "first"
+        );
+        assert!(!staging.exists());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn staged_rebuild_prune_does_not_delete_live_output() {
+        // Regression test for the critical bug: during a staged Full rebuild,
+        // build_with_artifacts runs prune_removed_outputs internally. The cache
+        // must be remapped to the staging prefix BEFORE building so the prune
+        // diff compares staging-vs-staging, never touching the live output.
+        let root = temp_dir("kiln-staged-prune");
+        let output = root.join("dist");
+        let staging = staging_dir(&output);
+
+        // Seed a live build with a page that exists in the cache.
+        std::fs::create_dir_all(output.join("posts/keep")).unwrap();
+        std::fs::write(output.join("posts/keep/index.html"), "live").unwrap();
+
+        let mut cache = crate::cache::BuildCache::new();
+        cache.replace_page_outputs([output.join("posts/keep/index.html")].into_iter().collect());
+
+        // Simulate the serve orchestration: remap live→staging before building.
+        cache.remap_outputs(&output, &staging);
+
+        // After remap, cache page_outputs point under staging, so a prune diff
+        // against staging paths is safe for the live output.
+        let cached = cache.page_outputs();
+        assert!(
+            cached.iter().all(|p| p.starts_with(&staging)),
+            "cache must reference staging, not live output"
+        );
+
+        // The live output is untouched.
+        assert_eq!(
+            std::fs::read_to_string(output.join("posts/keep/index.html")).unwrap(),
+            "live"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn staged_rebuild_remaps_from_output_path_form_not_resolved_path() {
+        // Regression coverage for symlinked output dirs. The cache stores paths
+        // in the original output path form used by incremental rebuilds; the
+        // staging dir may be computed from a resolved target on another path.
+        let mut cache = crate::cache::BuildCache::new();
+        let output_path_form = Path::new("/workspace/site/dist-link");
+        let resolved_target = Path::new("/mnt/volume/site/dist");
+        let staging = Path::new("/mnt/volume/site/.dist.kiln-staging");
+
+        cache.replace_page_outputs(
+            [output_path_form.join("posts/keep/index.html")]
+                .into_iter()
+                .collect(),
+        );
+
+        cache.remap_outputs(output_path_form, staging);
+        assert!(
+            cache.page_outputs().iter().all(|p| p.starts_with(staging)),
+            "pre-build remap must match the cache's original output path form"
+        );
+
+        cache.remap_outputs(staging, output_path_form);
+        assert!(cache
+            .page_outputs()
+            .contains(&output_path_form.join("posts/keep/index.html")));
+        assert!(!cache
+            .page_outputs()
+            .contains(&resolved_target.join("posts/keep/index.html")));
+    }
+
+    #[test]
+    fn cache_snapshot_restore_roundtrips_outputs() {
+        let mut cache = crate::cache::BuildCache::new();
+        cache.replace_page_outputs([PathBuf::from("/dist/a/index.html")].into_iter().collect());
+        cache.add_public_output(PathBuf::from("/dist/assets/x.css"));
+
+        let snap = cache.snapshot();
+
+        // Mutate the cache (as a failed build would).
+        cache.replace_page_outputs(Default::default());
+        cache.replace_public_outputs(Default::default());
+
+        // Restore.
+        cache.restore(snap);
+
+        assert!(cache
+            .page_outputs()
+            .contains(Path::new("/dist/a/index.html")));
+        assert!(cache
+            .public_outputs()
+            .contains(Path::new("/dist/assets/x.css")));
     }
 
     fn temp_dir(prefix: &str) -> std::path::PathBuf {
