@@ -7,58 +7,82 @@ expression: html
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Snapshot Site</title>
+  <title>Snapshot Site - Snapshot subtitle</title>
   <meta name="description" content="A snapshot test site">
   <link rel="canonical" href="https:&#x2F;&#x2F;snapshot.test/">
   <link rel="alternate" type="application/rss+xml" title="Snapshot Site" href="/rss.xml">
   <meta property="og:type" content="website">
   <meta property="og:title" content="Snapshot Site">
   <meta property="og:description" content="A snapshot test site">
+  <meta property="og:url" content="https:&#x2F;&#x2F;snapshot.test/">
   <meta name="twitter:card" content="summary">
+  <meta name="color-scheme" content="light dark">
   <link rel="stylesheet" href="/assets/styles.3e67b4a9505b.css">
 </head>
 <body>
-  <header>
-    <a href="/">Snapshot Site</a>
-    <nav>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="container">
+      <a class="site-title" href="/">Snapshot Site</a>
       
-    </nav>
+    </div>
   </header>
-  <main><h1>Snapshot Site</h1>
-<p>Snapshot subtitle</p>
+  <main id="main" class="container">
+    <section class="hero">
+  <h1>Snapshot Site</h1>
+  <p class="hero-subtitle">Snapshot subtitle</p>
+  
+</section>
 
 
-
-
-<section>
-  <h2>Posts</h2>
-  <ul>
+<section class="featured">
+  <h2>Featured</h2>
+  <div class="featured-grid">
     
-    <li><a href="&#x2F;posts&#x2F;hello&#x2F;">Hello World</a> — 2026.06.01</li>
+    <article class="featured-card">
+      <h3><a href="&#x2F;posts&#x2F;hello&#x2F;">Hello World</a></h3>
+      <p>First snapshot test</p>
+      <time datetime="2026-06-01">June 1, 2026</time>
+    </article>
     
-  </ul>
+  </div>
 </section>
 
 
 
 
 
-<section>
-  <h2>Archive</h2>
+<section class="archive">
   
-  <h3>2026</h3>
-  <ul>
-    
-    <li><a href="&#x2F;posts&#x2F;hello&#x2F;">Hello World</a></li>
-    
-  </ul>
+  <div class="archive-year">
+    <h2 class="archive-year-label">2026</h2>
+    <ul class="archive-list">
+      
+      <li class="archive-item">
+        <time datetime="2026-06-01" class="archive-date">2026.06.01</time>
+        <div class="archive-content">
+          <a href="&#x2F;posts&#x2F;hello&#x2F;" class="archive-link">Hello World</a>
+          <p class="archive-desc">First snapshot test</p>
+        </div>
+      </li>
+      
+    </ul>
+  </div>
   
 </section>
 
-</main>
-  <footer>
-    <p>&copy; 2026 Snap Author</p>
-    
+
+
+
+  </main>
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <p class="footer-copy">&copy; 2026 Snap Author</p>
+      
+      <p class="footer-meta">
+        <a href="/rss.xml" class="rss-link">RSS</a>
+      </p>
+    </div>
   </footer>
 </body>
 </html>

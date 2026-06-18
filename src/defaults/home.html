@@ -1,35 +1,59 @@
-<h1>{{ site.title }}</h1>
-{% if site.subtitle %}<p>{{ site.subtitle }}</p>{% endif %}
-{% if theme.intro %}<p>{{ theme.intro }}</p>{% endif %}
-{% if theme.email %}<p><a href="mailto:{{ theme.email }}">Email</a></p>{% endif %}
+<section class="hero">
+  <h1>{{ site.title }}</h1>
+  {% if site.subtitle %}<p class="hero-subtitle">{{ site.subtitle }}</p>{% endif %}
+  {% if theme.intro %}<p class="hero-intro">{{ theme.intro }}</p>{% endif %}
+</section>
 
 {% if featured_posts %}
-<section>
-  <h2>Posts</h2>
-  <ul>
+<section class="featured">
+  <h2>Featured</h2>
+  <div class="featured-grid">
     {% for post in featured_posts %}
-    <li><a href="{{ post.url }}">{{ post.title }}</a> — {{ post.short_date }}</li>
+    <article class="featured-card">
+      <h3><a href="{{ post.url }}">{{ post.title }}</a></h3>
+      {% if post.description %}<p>{{ post.description }}</p>{% endif %}
+      {% if post.long_date %}<time datetime="{{ post.iso_date }}">{{ post.long_date }}</time>{% endif %}
+    </article>
     {% endfor %}
-  </ul>
+  </div>
 </section>
 {% endif %}
 
 {% if theme.home_image and theme.home_image.enabled %}
-<figure>
-  <img src="{{ theme.home_image.src }}" alt="{{ theme.home_image.alt }}" width="{{ theme.home_image.width }}" height="{{ theme.home_image.height }}">
+<figure class="home-image">
+  <img src="{{ theme.home_image.src }}" alt="{{ theme.home_image.alt }}" width="{{ theme.home_image.width }}" height="{{ theme.home_image.height }}" loading="lazy">
 </figure>
 {% endif %}
 
 {% if archive %}
-<section>
-  <h2>Archive</h2>
+<section class="archive">
   {% for year_entry in archive %}
-  <h3>{{ year_entry.year }}</h3>
-  <ul>
-    {% for post in year_entry.posts %}
-    <li><a href="{{ post.url }}">{{ post.title }}</a></li>
-    {% endfor %}
-  </ul>
+  <div class="archive-year">
+    <h2 class="archive-year-label">{{ year_entry.year }}</h2>
+    <ul class="archive-list">
+      {% for post in year_entry.posts %}
+      <li class="archive-item">
+        {% if post.short_date %}<time datetime="{{ post.iso_date }}" class="archive-date">{{ post.short_date }}</time>{% endif %}
+        <div class="archive-content">
+          <a href="{{ post.url }}" class="archive-link">{{ post.title }}</a>
+          {% if post.description %}<p class="archive-desc">{{ post.description }}</p>{% endif %}
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
   {% endfor %}
 </section>
+{% endif %}
+
+{% if paginator and paginator.total_pages > 1 %}
+<nav class="pagination" aria-label="Pagination">
+  {% if paginator.prev_url %}
+  <a href="{{ paginator.prev_url }}" class="pagination-link pagination-prev" rel="prev">&larr; Newer</a>
+  {% endif %}
+  <span class="pagination-info">Page {{ paginator.current_index }} of {{ paginator.total_pages }}</span>
+  {% if paginator.next_url %}
+  <a href="{{ paginator.next_url }}" class="pagination-link pagination-next" rel="next">Older &rarr;</a>
+  {% endif %}
+</nav>
 {% endif %}

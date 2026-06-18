@@ -1,9 +1,12 @@
-<section class="taxonomy-index">
-  {% if taxonomy.name %}<h1>{{ taxonomy.name }}</h1>{% endif %}
+<section class="taxonomy-page">
+  {% if taxonomy.name %}
+  <h1 class="taxonomy-title">{{ taxonomy.name }}</h1>
+  {% endif %}
+
   {% if taxonomy.terms %}
-  <ul>
+  <ul class="term-cloud">
     {% for term in taxonomy.terms %}
-    <li><a href="{{ term.url }}">{{ term.name }}</a></li>
+    <li><a href="{{ term.url }}" class="term-link">{{ term.name }}</a></li>
     {% endfor %}
   </ul>
   {% endif %}

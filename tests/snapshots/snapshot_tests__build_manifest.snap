@@ -15,7 +15,7 @@ expression: sorted
         "404.html",
         "layout.html"
       ],
-      "template_hash": "e9c61945f2ed"
+      "template_hash": "97352d292144"
     },
     {
       "content_hash": "420212121686",
@@ -27,7 +27,7 @@ expression: sorted
         "layout.html",
         "post.html"
       ],
-      "template_hash": "b1042c2bc203"
+      "template_hash": "b2adb04e010e"
     },
     {
       "content_hash": "assets/styles.3e67b4a9505b.css",
@@ -75,7 +75,7 @@ expression: sorted
         "home.html",
         "layout.html"
       ],
-      "template_hash": "959adac6d24e"
+      "template_hash": "ec6cc370114f"
     },
     {
       "content_hash": "tags/index.html",
@@ -87,7 +87,7 @@ expression: sorted
         "layout.html",
         "taxonomy.html"
       ],
-      "template_hash": "fed7db03eb1c"
+      "template_hash": "874d7bb4086e"
     },
     {
       "content_hash": "tags/snapshot/index.html",
@@ -99,7 +99,7 @@ expression: sorted
         "layout.html",
         "term.html"
       ],
-      "template_hash": "1a11571fc45e"
+      "template_hash": "c4bf1a915511"
     },
     {
       "content_hash": "tags/test/index.html",
@@ -111,7 +111,7 @@ expression: sorted
         "layout.html",
         "term.html"
       ],
-      "template_hash": "1a11571fc45e"
+      "template_hash": "c4bf1a915511"
     }
   ]
 }

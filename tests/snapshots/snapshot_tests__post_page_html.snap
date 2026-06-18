@@ -7,43 +7,57 @@ expression: html
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Hello World · Snapshot Site</title>
+  <title>Hello World - Snapshot Site</title>
   <meta name="description" content="First snapshot test">
   <link rel="canonical" href="https:&#x2F;&#x2F;snapshot.test/posts&#x2F;hello/">
   <link rel="alternate" type="application/rss+xml" title="Snapshot Site" href="/rss.xml">
   <meta property="og:type" content="article">
-  <meta property="og:title" content="Hello World · Snapshot Site">
+  <meta property="og:title" content="Hello World">
   <meta property="og:description" content="First snapshot test">
+  <meta property="og:url" content="https:&#x2F;&#x2F;snapshot.test/posts&#x2F;hello/">
   <meta name="twitter:card" content="summary">
+  <meta name="color-scheme" content="light dark">
   <link rel="stylesheet" href="/assets/styles.3e67b4a9505b.css">
 </head>
 <body>
-  <header>
-    <a href="/">Snapshot Site</a>
-    <nav>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="container">
+      <a class="site-title" href="/">Snapshot Site</a>
       
+    </div>
+  </header>
+  <main id="main" class="container">
+    <article class="post">
+  <header class="post-header">
+    <a href="/" class="back-link">&larr; Home</a>
+    <h1 class="post-title">Hello World</h1>
+    <div class="post-meta">
+      <time datetime="2026-06-01">June 1, 2026</time>
+      
+      <span class="post-tags">
+        <span class="tag">test</span><span class="tag">snapshot</span>
+      </span>
+      
+    </div>
+    <p class="post-description">First snapshot test</p>
+  </header>
+
+  
+  <details class="toc" open>
+    <summary>On this page</summary>
+    <nav aria-label="Table of contents">
+      <ol>
+        
+        <li><a href="#intro">Intro</a></li>
+        
+      </ol>
     </nav>
-  </header>
-  <main><article>
-  <header>
-    <a href="/">← Home</a>
-    <h1>Hello World</h1>
-    <time datetime="2026-06-01">June 1, 2026</time>
-    <p>First snapshot test</p>
-    
-    <p><span>test</span><span>snapshot</span></p>
-    
-  </header>
+  </details>
   
-  <nav aria-label="Table of contents">
-    <ol>
-      
-      <li><a href="#intro">Intro</a></li>
-      
-    </ol>
-  </nav>
-  
-  <div><h2 id="intro" tabindex="-1">Intro <a class="heading-anchor" href="#intro" aria-hidden="true">#</a></h2>
+
+  <div class="prose">
+    <h2 id="intro" tabindex="-1">Intro <a class="heading-anchor" href="#intro" aria-hidden="true">#</a></h2>
 <p>Paragraph with <strong>bold</strong>.</p>
 <div class="table-scroll">
 <table>
@@ -61,12 +75,19 @@ expression: html
 </tbody>
 </table>
 </div>
-</div>
+
+  </div>
 </article>
-</main>
-  <footer>
-    <p>&copy; 2026 Snap Author</p>
-    
+
+  </main>
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <p class="footer-copy">&copy; 2026 Snap Author</p>
+      
+      <p class="footer-meta">
+        <a href="/rss.xml" class="rss-link">RSS</a>
+      </p>
+    </div>
   </footer>
 </body>
 </html>

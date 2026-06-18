@@ -346,7 +346,7 @@ mod tests {
         ctx.insert("og_type", "website");
 
         let html = engine.render("layout.html", &ctx).unwrap();
-        assert!(html.contains("&lt;Title&gt; · &lt;Site&gt;"));
+        assert!(html.contains("&lt;Title&gt; - &lt;Site&gt;"));
         assert!(html.contains("A&amp;B"));
         assert!(html.contains("&lt;Nav&gt;"));
         assert!(html.contains("<main><strong>safe</strong></main>"));
