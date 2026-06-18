@@ -179,11 +179,12 @@ fn rewrite_css_urls(css: &str, css_original_path: &str, manifest: &AssetManifest
             None => break,
         };
 
-        let new_value = if let Some(resolved) = resolve_and_lookup(url_value, css_dir, manifest) {
-            rel_path(css_dir, &resolved)
-        } else {
-            url_value.to_string()
-        };
+        let new_value =
+            if let Some((resolved, suffix)) = resolve_and_lookup(url_value, css_dir, manifest) {
+                format!("{}{}", rel_path(css_dir, &resolved), suffix)
+            } else {
+                url_value.to_string()
+            };
 
         match quote {
             Some('"') => result.push_str(&format!("url(\"{}\")", new_value)),
@@ -203,7 +204,11 @@ fn rewrite_css_urls(css: &str, css_original_path: &str, manifest: &AssetManifest
 fn extract_quoted(s: &str, quote: char) -> (&str, &str) {
     let inner = &s[1..]; // skip opening quote
     if let Some(end) = inner.find(quote) {
-        (&inner[..end], &inner[end + 1..])
+        let remaining = &inner[end + 1..];
+        (
+            &inner[..end],
+            remaining.strip_prefix(')').unwrap_or(remaining),
+        )
     } else {
         (inner, "")
     }
@@ -217,7 +222,11 @@ fn extract_unquoted(s: &str) -> (&str, &str) {
 
 /// Resolve a url() value relative to the CSS file's directory and look it up in the manifest.
 /// Returns the fingerprinted path if found.
-fn resolve_and_lookup(url_value: &str, css_dir: &Path, manifest: &AssetManifest) -> Option<String> {
+fn resolve_and_lookup(
+    url_value: &str,
+    css_dir: &Path,
+    manifest: &AssetManifest,
+) -> Option<(String, String)> {
     // Skip data: urls, http(s): urls, fragments
     let trimmed = url_value.trim();
     if trimmed.is_empty()
@@ -229,11 +238,29 @@ fn resolve_and_lookup(url_value: &str, css_dir: &Path, manifest: &AssetManifest)
         return None;
     }
 
+    let (path_value, suffix) = split_url_suffix(trimmed);
+    if path_value.is_empty() {
+        return None;
+    }
+
     // Resolve relative to css_dir
-    let resolved = css_dir.join(trimmed);
+    let resolved = css_dir.join(path_value);
     // Normalize: drop leading ./ and resolve ..
     let normalized = normalize_path(&resolved);
-    manifest.mappings.get(&normalized).cloned()
+    manifest
+        .mappings
+        .get(&normalized)
+        .cloned()
+        .map(|resolved| (resolved, suffix.to_string()))
+}
+
+fn split_url_suffix(url_value: &str) -> (&str, &str) {
+    match (url_value.find('?'), url_value.find('#')) {
+        (Some(query), Some(fragment)) => url_value.split_at(query.min(fragment)),
+        (Some(query), None) => url_value.split_at(query),
+        (None, Some(fragment)) => url_value.split_at(fragment),
+        (None, None) => (url_value, ""),
+    }
 }
 
 /// Normalize a path: resolve `.` and `..`, produce a clean relative path.
@@ -484,6 +511,22 @@ mod tests {
         let css = "@font-face { src: url('../fonts/roboto.woff2'); }";
         let rewritten = super::rewrite_css_urls(css, "css/style.css", &manifest);
         assert!(rewritten.contains("url('../fonts/roboto.def456.woff2')"));
+    }
+
+    #[test]
+    fn rewrites_url_and_preserves_query_and_fragment_suffix() {
+        let mut manifest = AssetManifest::default();
+        manifest
+            .mappings
+            .insert("images/logo.svg".into(), "images/logo.abc123.svg".into());
+
+        let css = r##".a { mask: url("../images/logo.svg?v=1#icon"); }"##;
+        let rewritten = super::rewrite_css_urls(css, "css/style.css", &manifest);
+
+        assert_eq!(
+            rewritten,
+            r##".a { mask: url("../images/logo.abc123.svg?v=1#icon"); }"##
+        );
     }
 
     #[test]
